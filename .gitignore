@@ -1,0 +1,8 @@
+*.pt
+*.root
+*.png
+*.pdf
+logs/
+lightning_logs/
+*.mac
+__pycache__

@@ -1,0 +1,118 @@
+---
+
+# Hydra specifc options
+hydra:
+  help:
+    template:
+      'TODO: Add help message'
+  run:
+    dir:
+      logs/${logging.name}/${now:%Y-%m-%d_%H-%M-%S}
+
+# Set the mode: preprocess, train, test
+mode: train
+
+# Set the device to use (I'm not sure that I've properly implemented this everywhere)
+device: gpu
+
+# Set the path to the training data and the test/train/validation splits
+data:
+  datapath: data/10003/*.pt
+  # datapath: /home/benwilson/data/pinpointG4_data/pt/10001/*.pt
+  train_split: 0.7
+  test_split: 0.2
+  val_split: 0.1
+
+# Set the input/output path when preprocessing the ROOT NTuples -> pytorch .pt files
+preprocessing:
+  input_dirpath: /home/benwilson/data/pinpointG4_data/root/10003/*.root
+  # output_dirpath: /home/benwilson/data/pinpointG4_data/pt/10003/
+  output_dirpath: data/10003/
+  num_bins_x: 2048  # binning for the CNN images
+  num_bins_y: 2048
+  num_bins_z: 100
+
+# Configure the model parameters
+model:
+  architecture: RegressionCNN
+  feature_dim: 512
+  conv_dims: [32, 64, 128, 256]
+  fc_dims: [256, 128, 64]
+  kernel_size: 3
+  padding: 1
+  dropout: 0.3
+  use_scintBarsX: False
+  use_scintBarsY: False
+
+# Configure the training options
+training:
+  batch_size: 16
+  max_epochs: 500
+  learning_rate: 0.001
+  targets: ["E_nu", "E_lep", "Eta_lep"] # the regression targets
+  # targets: ["E_nu"] # the regression targets
+  num_workers: 4
+  use_weights: True
+  
+  early_stopping:
+    monitor: val_loss
+    min_delta: 0.0
+    patience: 40
+
+# Configure the testing options
+testing:
+  run_dir: null  # Override this option to set the run directory
+  batch_size: 32
+  num_workers: 16
+  checkpoint_dir: lightning_logs/version_0/checkpoints # Specify the checkpoint subdirectory. You shouldn't need to change this unless you've tweaked the logging dirs
+  checkpoint_filepath: null # Specify the checkpoint file directly if given
+  output_file: results.root # Name of the output file the resolution histograms get saved to
+
+# Logging options
+logging:
+  name: energy_regression_${mode}
+  monitor: val_loss
+  mode: min
+  save_top_k: 3
+  verbose: False
+
+# Plotting options
+plotting:
+  formats: ["png", "pdf"]
+  dpi: 300
+
+
+# Define some properties for the target variables; used when making the resolution plots
+# The `bins` field is used to split the resolution by energy/eta/etc... range 
+variables:
+
+  E_nu: 
+    name: "Neutrino Energy"
+    latex: "E_{\\nu}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+  E_lep: 
+    name: "Lepton Energy"
+    latex: "E_{\\mathrm{lep}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+  Eta_lep:
+    name: "Lepton Pseudorapidity"
+    latex: "\\eta_{\\mathrm{lep}}"
+    unit: ""
+    transformation: null
+    bins: [[0, 3], [3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
+
+  E_had: 
+    name: "Sum of Charged Hadron Energy"
+    latex: "\\sum E_{\\mathrm{chg. had}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+
+exp_name: "my experiment"  # Just a string that can be set to name an experiment. 
