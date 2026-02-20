@@ -14,8 +14,8 @@ import uproot
 from copy import deepcopy
 
 from source.model import RegressionCNN
-from source.train import ProjectionDataModule   
-from source.train import EnergyRegressor
+from train import ProjectionDataModule   
+from train import EnergyRegressor
 from source.preprocess import CNNProjectionDataset
 
 from dataclasses import dataclass

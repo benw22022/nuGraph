@@ -196,8 +196,8 @@ class GraphDataModule(pl.LightningDataModule):
     def __init__(
         self,
         pt_files,
-        batch_size=4,
-        num_workers=4,  # You can adjust
+        batch_size=2,
+        num_workers=4,
         train_test_val_split=(0.7, 0.2, 0.1),
     ):
         super().__init__()
