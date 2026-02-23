@@ -83,8 +83,9 @@ class GraphDataset(Dataset):
             if "NC" in process:
                 interaction = 3
             else:
-                interaction = {12: 0, 14: 1, 16: 2}.get(abs(pdg), 3)
+                interaction = {12: 0, 14: 1, 16: 2}.get(abs(pdg))
 
+            
             data = Data( 
                 x=torch.from_numpy(x),
                 y_class=torch.tensor(interaction),
@@ -102,94 +103,46 @@ class GraphDataset(Dataset):
         return self.data[idx]
     
 
+# class CombinedDataset(Dataset):
+#     def __init__(self, pt_files):
+#         self.datasets = [torch.load(f, map_location="cpu", weights_only=False, mmap=True) for f in pt_files]
+#         self.cum_lengths = []
+#         total = 0
+#         for ds in self.datasets:
+#             total += len(ds)
+#             self.cum_lengths.append(total)
+
+#     def __len__(self):
+#         return self.cum_lengths[-1]
+
+#     def __getitem__(self, idx):
+#         for ds_idx, end in enumerate(self.cum_lengths):
+#             if idx < end:
+#                 start = 0 if ds_idx == 0 else self.cum_lengths[ds_idx - 1]
+#                 return self.datasets[ds_idx][idx - start]
+#         raise IndexError
+
 class CombinedDataset(Dataset):
     def __init__(self, pt_files):
-        self.datasets = [torch.load(f, map_location="cpu", weights_only=False, mmap=True) for f in pt_files]
-        self.cum_lengths = []
-        total = 0
-        for ds in self.datasets:
-            total += len(ds)
-            self.cum_lengths.append(total)
+        self.datasets = [
+            torch.load(f, map_location="cpu", weights_only=False, mmap=True)
+            for f in pt_files
+        ]
+
+        self.index_map = []
+        for ds_idx, ds in enumerate(self.datasets):
+            for i in range(len(ds)):
+                self.index_map.append((ds_idx, i))
+
+        # shuffle events globally
+        random.shuffle(self.index_map)
 
     def __len__(self):
-        return self.cum_lengths[-1]
+        return len(self.index_map)
 
     def __getitem__(self, idx):
-        for ds_idx, end in enumerate(self.cum_lengths):
-            if idx < end:
-                start = 0 if ds_idx == 0 else self.cum_lengths[ds_idx - 1]
-                return self.datasets[ds_idx][idx - start]
-        raise IndexError
-
-
-# class GraphDataModule(pl.LightningDataModule):
-#     def __init__(
-#         self,
-#         pt_files,
-#         batch_size=4,
-#         num_workers=18,
-#         train_test_val_split=(0.7, 0.2, 0.1),
-#     ):
-#         super().__init__()
-#         self.pt_files = pt_files
-#         self.batch_size = batch_size
-#         self.num_workers = num_workers
-#         self.train_split = train_test_val_split[0]
-#         self.test_split = train_test_val_split[1]
-#         self.val_split = train_test_val_split[2]
-
-#         assert abs(self.train_split + self.test_split + self.val_split - 1.0) < 1e-6, "Splits must sum to 1.0"
-
-#         self.setup()
-
-#     def setup(self, stage=None):
-#         files = list(self.pt_files)
-
-#         rng = random.Random(42)
-#         rng.shuffle(files)
-
-#         n = len(files)
-#         n_test = int(0.2 * n)
-#         n_val = int(0.1 * n)
-
-#         test_files = files[:n_test]
-#         val_files = files[n_test:n_test + n_val]
-#         train_files = files[n_test + n_val:]
-
-#         self.train_ds = CombinedDataset(train_files)
-#         self.val_ds   = CombinedDataset(val_files)
-#         self.test_ds  = CombinedDataset(test_files)
-
-#         logging.info(f"Train events: {len(self.train_ds)}")
-#         logging.info(f"Val events:   {len(self.val_ds)}")
-#         logging.info(f"Test events:  {len(self.test_ds)}")
-
-#     def train_dataloader(self):
-#         return DataLoader(
-#             self.train_ds,
-#             batch_size=self.batch_size,
-#             shuffle=True,
-#             num_workers=self.num_workers,
-#             pin_memory=True,
-#         )
-
-#     def val_dataloader(self):
-#         return DataLoader(
-#             self.val_ds,
-#             batch_size=self.batch_size,
-#             shuffle=False,
-#             num_workers=self.num_workers,
-#             pin_memory=True,
-#         )
-
-#     def test_dataloader(self):
-#         return DataLoader(
-#             self.test_ds,
-#             batch_size=self.batch_size,
-#             shuffle=False,
-#             num_workers=self.num_workers,
-#             pin_memory=True,
-#         )
+        ds_idx, sample_idx = self.index_map[idx]
+        return self.datasets[ds_idx][sample_idx]
 
 
 class GraphDataModule(pl.LightningDataModule):

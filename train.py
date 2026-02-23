@@ -155,99 +155,105 @@ import logging
 #         }
 
 
+from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
+from source.model import GravNetModel
+import glob
+import tqdm
+import torch
+from torch_geometric.data import DataLoader
+import torch.nn as nn 
+import torch.nn.functional as F
+# from source.train import GravNetLightning
+from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+import pytorch_lightning as pl
+from pytorch_lightning import Trainer
+import os
+import yaml
+# from source.preprocess import preprocess_data
+
+class GravNetLightning(pl.LightningModule):
+    def __init__(
+        self,
+        lr=1e-3,
+        lambda_reg=0.25,
+    ):
+        super().__init__()
+
+        self.save_hyperparameters()
+
+        with open("/home/benwilson/work/nuGraph/config/config.yaml", 'r') as f:
+            hparams =yaml.safe_load(f)
+            hparams = hparams["model"]
+
+        self.model = GravNetModel(hparams=hparams)
+
+        self.cls_loss = nn.CrossEntropyLoss()
+        self.reg_loss = nn.HuberLoss()
+
+    def forward(self, data):
+        return self.model(data)
+
+    def training_step(self, batch, batch_idx):
+        
+        # if batch_idx % 50 == 0:
+        #     print(f"{torch.cuda.memory_allocated() / 1e9:.2f} GB")
+        # if batch_idx % 100 == 0:
+            # print(batch.y_class)
+        
+        batch.y_class
+
+        class_logits, energy_pred = self(batch)
+
+        cls_loss = self.cls_loss(class_logits, batch.y_class)
+        reg_loss = self.reg_loss(energy_pred, batch.y_energy)
+
+        loss = cls_loss + self.hparams.lambda_reg * reg_loss
+
+        preds = torch.argmax(class_logits, dim=1)
+        acc = (preds == batch.y_class).float().mean()
+
+        self.log("train_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
+        self.log("train_cls_loss", cls_loss.detach(), batch_size=batch.num_graphs)
+        self.log("train_reg_loss", reg_loss.detach(), batch_size=batch.num_graphs)
+        self.log("train_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
+
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        class_logits, energy_pred = self(batch)
+
+        cls_loss = self.cls_loss(class_logits, batch.y_class)
+        reg_loss = self.reg_loss(energy_pred, batch.y_energy)
+
+        loss = cls_loss + self.hparams.lambda_reg * reg_loss
+
+        preds = torch.argmax(class_logits, dim=1)
+        acc = (preds == batch.y_class).float().mean()
+
+        self.log("val_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
+        self.log("val_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
+
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.AdamW(
+            self.parameters(),
+            lr=self.hparams.lr,
+        )
+
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=50,
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": scheduler,
+        }
+
 
 if __name__ == "__main__":
-
-    from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-    from source.model import GravNetModel
-    import glob
-    import tqdm
-    import torch
-    from torch_geometric.data import DataLoader
-    import torch.nn as nn 
-    import torch.nn.functional as F
-    # from source.train import GravNetLightning
-    from pytorch_lightning.loggers import TensorBoardLogger
-    from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
-    import pytorch_lightning as pl
-    from pytorch_lightning import Trainer
-    import os
-    # from source.preprocess import preprocess_data
-
-    class GravNetLightning(pl.LightningModule):
-        def __init__(
-            self,
-            lr=1e-3,
-            lambda_reg=0.5,
-        ):
-            super().__init__()
-
-            self.save_hyperparameters()
-
-            self.model = GravNetModel()
-
-            self.cls_loss = nn.CrossEntropyLoss()
-            self.reg_loss = nn.HuberLoss()
-
-        def forward(self, data):
-            return self.model(data)
-
-        def training_step(self, batch, batch_idx):
-            
-            if batch_idx % 50 == 0:
-                print(f"{torch.cuda.memory_allocated() / 1e9:.2f} GB")
-
-
-            class_logits, energy_pred = self(batch)
-
-            cls_loss = self.cls_loss(class_logits, batch.y_class)
-            reg_loss = self.reg_loss(energy_pred, batch.y_energy)
-
-            loss = cls_loss + self.hparams.lambda_reg * reg_loss
-
-            preds = torch.argmax(class_logits, dim=1)
-            acc = (preds == batch.y_class).float().mean()
-
-            self.log("train_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
-            self.log("train_cls_loss", cls_loss.detach(), batch_size=batch.num_graphs)
-            self.log("train_reg_loss", reg_loss.detach(), batch_size=batch.num_graphs)
-            self.log("train_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
-
-
-            return loss
-
-        def validation_step(self, batch, batch_idx):
-            class_logits, energy_pred = self(batch)
-
-            cls_loss = self.cls_loss(class_logits, batch.y_class)
-            reg_loss = self.reg_loss(energy_pred, batch.y_energy)
-
-            loss = cls_loss + self.hparams.lambda_reg * reg_loss
-
-            preds = torch.argmax(class_logits, dim=1)
-            acc = (preds == batch.y_class).float().mean()
-
-            self.log("val_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
-            self.log("val_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
-
-
-        def configure_optimizers(self):
-            optimizer = torch.optim.AdamW(
-                self.parameters(),
-                lr=self.hparams.lr,
-            )
-
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer,
-                T_max=50,
-            )
-
-            return {
-                "optimizer": optimizer,
-                "lr_scheduler": scheduler,
-            }
-
-
 
     model = GravNetLightning()
 
@@ -260,8 +266,8 @@ if __name__ == "__main__":
 
     datamodule = GraphDataModule(
         pt_files=pt_files,
-        batch_size=1,
-        num_workers=31,
+        batch_size=2,
+        num_workers=8,
     )
 
 
@@ -278,6 +284,11 @@ if __name__ == "__main__":
     mode="min",
     verbose=True,
     )
+    
+    # datamodule.setup()
+    # for batch in datamodule.train_dataloader():
+    #     print(batch.y_class.min(), batch.y_class.max())
+        # break
 
 
     trainer = Trainer(
@@ -286,7 +297,10 @@ if __name__ == "__main__":
         devices=1,
         callbacks=[checkpoint_cb, early_stop_cb],
         log_every_n_steps=50,
-        accumulate_grad_batches=1
+        accumulate_grad_batches=32,
+        benchmark=True,
+        precision="16-mixed",
+
     )
 
     trainer.fit(model, datamodule=datamodule)
