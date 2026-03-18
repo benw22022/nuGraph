@@ -10,7 +10,8 @@ from tqdm import tqdm
 import numpy as np
 import awkward as ak
 from torch_geometric.loader import DataLoader as GeoDataLoader
-
+from torch_geometric.nn import radius_graph
+import vector
 
 import torch
 from torch_geometric.data import Dataset, Data
@@ -19,7 +20,7 @@ import os
 
 
 class GraphDataset(Dataset):
-    def __init__(self, file_name):
+    def __init__(self, file_name, compute_edges=False):
         super().__init__()
 
         self.file_event_counts = []
@@ -56,6 +57,39 @@ class GraphDataset(Dataset):
             )
         }
 
+        # primaries_map = {
+        #     evt: (pdgc, q, px, py, pz, E)
+        #     for evt, pdgc, q, px, py, pz, E in zip(
+        #         primaries["evtID"],
+        #         primaries["PDG"],
+        #         primaries["charge"],
+        #         primaries["Px"],
+        #         primaries["Py"],
+        #         primaries["Pz"],
+        #         primaries["E"],
+        #     )
+        # }
+
+        primaries_map = {
+            evt: ([], [], [], [], [], []) for evt in primaries["evtID"]
+        }
+        for evt, pdgc, q, px, py, pz, E in zip(
+            primaries["evtID"],
+            primaries["PDG"],
+            primaries["charge"],
+            primaries["Px"],
+            primaries["Py"],
+            primaries["Pz"],
+            primaries["E"],
+        ):
+            primaries_map[evt][0].append(pdgc)
+            primaries_map[evt][1].append(q)
+            primaries_map[evt][2].append(px)
+            primaries_map[evt][3].append(py)
+            primaries_map[evt][4].append(pz)
+            primaries_map[evt][5].append(E)
+
+        
 
         unique_evt, evt_index = np.unique(event_id, return_inverse=True)
 
@@ -77,21 +111,76 @@ class GraphDataset(Dataset):
 
             x = np.stack([row, col, layer], axis=1).astype(np.float32)
             
-            energy, pdg, process, vx, vy, vz = truth_map[evt]
-            energy = np.log1p(energy / 1000) # Convert Mev -> GeV and take log
+            nu_energy, nu_pdg, process, vx, vy, vz = truth_map[evt]
+            nu_energy = np.log10(nu_energy / 1000) # Convert Mev -> GeV and take log
+
+            E_vis = 0
+            E_lep = 0
+            pT_miss = 0
+            p_jet = 0
+            pT_jet = 0
+            p_lep = 0
+            pT_lep = 0
+            
+            p4_lep = vector.obj(px=0, py=0, pz=0, E=0)
+            p4_jet = vector.obj(px=0, py=0, pz=0, E=0)
+            p4_jet_vis = vector.obj(px=0, py=0, pz=0, E=0)
+            p4_miss = vector.obj(px=0, py=0, pz=0, E=0)
+
+            prim_pdg, prim_charge, prim_px, prim_py, prim_pz, prim_E = primaries_map.get(evt, [])
+            for pdg, q, px, py, pz, E in zip(prim_pdg, prim_charge, prim_px, prim_py, prim_pz, prim_E):
+                # if abs(pdg) in [12, 14, 16]: # neutrinos
+                #     p4_miss += vector.obj(px=px, py=py, pz=pz, E=E)
+                if abs(pdg) in [11, 13, 15]: # leptons
+                    p4_lep += vector.obj(px=px, py=py, pz=pz, E=E)
+                    p4_miss += vector.obj(px=-px, py=-py, pz=-pz, E=E)
+                else: # hadrons
+                    p4_jet += vector.obj(px=px, py=py, pz=pz, E=E)
+                    p4_miss += vector.obj(px=-px, py=-py, pz=-pz, E=E)
+                    if q != 0:
+                        p4_jet_vis += vector.obj(px=px, py=py, pz=pz, E=E)
+            
+            E_vis = p4_jet_vis.E + p4_lep.E
+            pT_miss = p4_miss.pt
+            pT_lep = p4_lep.pt
+            pT_jet = p4_jet.pt
+            p_jet = p4_jet.p
+            p_lep = p4_lep.p
+            E_lep = p4_lep.E
+
+            pT_miss = np.log10(pT_miss/1000 + 1e-6)
+            pT_lep = np.log10(pT_lep/1000 + 1e-6)
+            pT_jet = np.log10(pT_jet/1000 + 1e-6)
+            p_jet = np.log10(p_jet/1000 + 1e-6)
+            p_lep = np.log10(p_lep/1000 + 1e-6)
+            E_lep = np.log10(E_lep/1000 + 1e-6)
+            E_vis = np.log10(E_vis/1000 + 1e-6)
+
 
             if "NC" in process:
                 interaction = 3
             else:
-                interaction = {12: 0, 14: 1, 16: 2}.get(abs(pdg))
+                interaction = {12: 0, 14: 1, 16: 2}.get(abs(nu_pdg))
 
             
             data = Data( 
                 x=torch.from_numpy(x),
                 y_class=torch.tensor(interaction),
-                y_energy=torch.tensor(energy, dtype=torch.float32),
+                E_nu=torch.tensor(nu_energy, dtype=torch.float32),
+                E_vis=torch.tensor(E_vis, dtype=torch.float32),
+                pT_miss=torch.tensor(pT_miss, dtype=torch.float32),
+                pT_lep=torch.tensor(pT_lep, dtype=torch.float32),
+                pT_jet=torch.tensor(pT_jet, dtype=torch.float32),
+                p_jet=torch.tensor(p_jet, dtype=torch.float32),
+                p_lep=torch.tensor(p_lep, dtype=torch.float32),
+                E_lep=torch.tensor(E_lep, dtype=torch.float32),
                 )
-
+            
+            if compute_edges:
+                data.to(device="cuda")
+                data.edge_index = radius_graph(data.x, r=2.5, loop=False, num_workers=31)
+                data.to(device="cpu")
+        
             self.data.append(data)
 
 
@@ -102,25 +191,6 @@ class GraphDataset(Dataset):
     def __getitem__(self, idx):
         return self.data[idx]
     
-
-# class CombinedDataset(Dataset):
-#     def __init__(self, pt_files):
-#         self.datasets = [torch.load(f, map_location="cpu", weights_only=False, mmap=True) for f in pt_files]
-#         self.cum_lengths = []
-#         total = 0
-#         for ds in self.datasets:
-#             total += len(ds)
-#             self.cum_lengths.append(total)
-
-#     def __len__(self):
-#         return self.cum_lengths[-1]
-
-#     def __getitem__(self, idx):
-#         for ds_idx, end in enumerate(self.cum_lengths):
-#             if idx < end:
-#                 start = 0 if ds_idx == 0 else self.cum_lengths[ds_idx - 1]
-#                 return self.datasets[ds_idx][idx - start]
-#         raise IndexError
 
 class CombinedDataset(Dataset):
     def __init__(self, pt_files):

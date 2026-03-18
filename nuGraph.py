@@ -2,8 +2,9 @@ import hydra
 import logging
 from omegaconf import DictConfig, OmegaConf
 # from source.train import run_training
-from source.preprocess import preprocess_root_to_parquet
-# from source.test import run_testing
+from source.preprocess import preprocess_data
+from source.test import run_testing
+from source.train import run_training
 
 
 @hydra.main(config_path="config", config_name="config", version_base="1.2")
@@ -17,11 +18,11 @@ def my_app(cfg: DictConfig) -> None:
     if cfg.mode.lower() == "preprocess":
         preprocess_data(cfg)
 
-    # elif cfg.mode.lower() == "train":
-    #     run_training(cfg)    
+    elif cfg.mode.lower() == "train":
+        run_training(cfg)    
     
-    # elif cfg.mode.lower()== "test":
-    #     run_testing(cfg)
+    elif cfg.mode.lower()== "test":
+        run_testing(cfg)
 
     else:
         logging.error(f"Unknown mode: {cfg.mode}")

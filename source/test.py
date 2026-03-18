@@ -13,13 +13,13 @@ from scipy.optimize import curve_fit
 import uproot
 from copy import deepcopy
 
-from source.model import RegressionCNN
-from train import ProjectionDataModule   
-from train import EnergyRegressor
-from source.preprocess import CNNProjectionDataset
+from source.model import FastGravNet, NeutrinoGravNetWithRegression
+from source.train import GravNetLightning
+from source.dataset import GraphDataModule
 
 from dataclasses import dataclass
 from tqdm import tqdm
+from pathlib import Path
 
 
 @dataclass
@@ -87,32 +87,30 @@ def run_inference(cfg, model, dataloader, device):
     model.eval()
     model.freeze()
 
+    true_classes = []
+    pred_classes = []
+    
     targets_true = {t : [] for t in cfg.training.targets}
     targets_pred = {t : [] for t in cfg.training.targets}
 
+
     for batch in tqdm(dataloader, desc="Running Inference..."):
-        x, targets = batch
+        batch = batch.to(device)
 
-        # x.to(device)
-        x[0] = x[0].to(device)
-        x[1] = x[1].to(device)
-        x[2] = x[2].to(device)
-        x[3] = x[3].to(device)
-
-
-        y = torch.stack(
+        target_truth = {t: batch[t] for t in cfg.training.targets if hasattr(batch, t)}
+        
+        y_true = torch.stack(
         [
-            targets[t].float()
+            target_truth[t].float()
             for t in cfg.training.targets
         ],
         dim=1,  # (batch, n targets)
         )
-        
-        # y_pred = model(x).unsqueeze(1)
-        y_pred = model(x)
 
+        class_logits, y_pred = model(batch)
+        
         for i, t in enumerate(cfg.training.targets):
-            targets_true[t].append(y.cpu()[:,i].numpy())
+            targets_true[t].append(y_true.cpu()[:,i].numpy())
             targets_pred[t].append(y_pred.cpu()[:,i].numpy())
 
     for t in cfg.training.targets:
@@ -129,9 +127,8 @@ def run_inference(cfg, model, dataloader, device):
             elif cfg.variables[t].get("transformation", None) == "eta":
                 targets_true[t] = 2 * np.arctan(np.exp(targets_true[t])) - np.pi/2
                 targets_pred[t] = 2 * np.arctan(np.exp(targets_pred[t])) - np.pi/2
-
-
-    return targets_true, targets_pred
+        
+    return (true_classes, pred_classes), (targets_true, targets_pred)
 
 
 def plot_resolution_hists(cfg, varname, targets_true, targets_pred, bias_params=None):
@@ -273,6 +270,7 @@ def plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False, 
         )
             
     ax.plot(x, x, "r--", linewidth=1, label=rf"${var_cfg.get('latex', varname)}^{{\rm reco}} = {var_cfg.get('latex', varname)}^{{\rm true}}$")
+    ax.axvline(np.mean(y_true), color="gray", linestyle="--", linewidth=0.5)
 
     if logscale:
         ax.set_xscale("log")
@@ -281,6 +279,8 @@ def plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False, 
     ax.set_xlabel(rf"True ${var_cfg.get('latex', varname)}$ {var_cfg.get('unit', '')}")
     ax.set_ylabel(rf"Reconstructed ${var_cfg.get('latex', varname)}$ {var_cfg.get('unit', '')}")
     ax.legend()
+    # ax.set_xlim(0, 4500)
+    # ax.set_ylim(0, 4500)
     plt.tight_layout()
 
     outfile = os.path.join(cfg.testing.run_dir, f"{varname}_TrueVsReco")
@@ -448,11 +448,64 @@ def plot_bias(cfg, varname, targets_true, targets_pred, bias_params=None):
 
     return popt
 
+def plot_true(cfg, varname, targets_true, logscale=False, bias_params=None):
+
+    var_cfg = cfg.variables.get(varname, {})
+
+    assert var_cfg is not None, f"No config found for variable {varname}"
+
+    y_true = deepcopy(targets_true[varname])
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    if logscale:
+        bins = np.logspace(
+            np.log10(y_true.min()),
+            np.log10(y_true.max()),
+            100,
+        )
+        ax.set_xscale("log")
+    else:
+        bins = np.linspace(
+            y_true.min(),
+            y_true.max(),
+            100,
+        )
+
+    ax.hist(
+        y_true,
+        bins=bins,
+        histtype="step",
+        linewidth=1.5,
+    )
+    latex_var = var_cfg.get('latex', varname)
+    unit = var_cfg.get('unit', '')
+    ax.set_xlabel(rf"True ${latex_var}$ {unit}")
+    ax.set_ylabel("Events")
+    outfile = os.path.join(cfg.testing.run_dir, f"{varname}_TrueDist")
+    for fmt in cfg.plotting.formats:
+        extn = fmt.lower().replace(".", "")
+        plt.savefig(f"{outfile}.{extn}", dpi=300)
+    logging.info(f"Plotted {outfile}")
+
+
+
+
+
 def run_testing(cfg: DictConfig):
 
     logging.info("Starting testing...")
 
     # Load the config for this run
+    if cfg.testing.run_dir is None:
+        logging.info("Finding most recent run directory...")
+        base_dir = Path(os.path.join("logs", cfg.logging.name.replace("test", "train")))
+        dirs = [d for d in base_dir.iterdir() if d.is_dir()]
+        latest_dir = max(dirs, key=lambda d: d.stat().st_ctime)
+        cfg.testing.run_dir = str(latest_dir)
+        logging.info(f"Using latest run directory: {cfg.testing.run_dir}")
+
+
     cfg_this_run = load_run_config(cfg.testing.run_dir)
     
     device = torch.device("cuda" if cfg.device == "gpu" else "cpu")
@@ -461,51 +514,48 @@ def run_testing(cfg: DictConfig):
     checkpoint_path = get_checkpoint_path(cfg)
 
     # Load the dataset
-    pt_files = glob.glob(cfg_this_run.data.datapath)
-    logging.info(f"Loading data from {cfg_this_run.data.datapath}")
-    assert len(pt_files) > 0, "No .pt files found"
+    pt_files = []
+    for run in cfg_this_run.data.runs:
+        run_files = glob.glob(os.path.join(cfg_this_run.data.datapath, str(run), "*.pt"))
+        logging.info(f"Found {len(run_files)} for run {run}")
+        pt_files += run_files
+    assert len(pt_files) > 0, "No .pt files found" 
+    logging.info(f"Found {len(pt_files)} files total")
 
-    datamodule = ProjectionDataModule(
+    datamodule = GraphDataModule(
         pt_files=pt_files,
         batch_size=cfg.training.batch_size,
         num_workers=cfg.training.num_workers,
     )
+    datamodule.setup()
 
     # Reconstruct model exactly as in training
-    backbone=RegressionCNN(
-            feature_dim=cfg_this_run.model.feature_dim,
-            num_targets=len(cfg_this_run.training.targets),
-            fc_dims=cfg_this_run.model.fc_dims,
-            conv_dims=cfg_this_run.model.conv_dims,
-            kernel_size=cfg_this_run.model.kernel_size,
-            padding=cfg_this_run.model.padding,
-            dropout=cfg_this_run.model.dropout,
-            use_scintBarsX=cfg_this_run.model.get("use_scintBarsX", False),
-            use_scintBarsY=cfg_this_run.model.get("use_scintBarsY", False),
-        ).to(device)
-    model = EnergyRegressor.load_from_checkpoint(
-        checkpoint_path,
-        model=backbone,
-    )
+    backbone = NeutrinoGravNetWithRegression(cfg_this_run.model).to(device)
+    model = GravNetLightning.load_from_checkpoint(
+            checkpoint_path,
+            model=backbone,
+            map_location="cpu"
+        )
     model.to(device)
 
 
-    targets_true, targets_pred = run_inference(
+    (_, _), (targets_true, targets_pred) = run_inference(
         cfg_this_run,
         model,
         datamodule.test_dataloader(),
-        device,
+        device=device
     )
 
     output_file = uproot.recreate(os.path.join(cfg.testing.run_dir, cfg.testing.output_file))
 
     for varname in cfg_this_run.training.targets:
 
-        if varname != "E_nu": continue
-
-        res_hists = plot_resolution_hists(cfg, varname, targets_true, targets_pred)
+        # res_hists = plot_resolution_hists(cfg, varname, targets_true, targets_pred)
         # plot_resolution_vs_target(cfg, varname, targets_true, targets_pred)
         true_v_reco = plot_true_vs_reco(cfg, varname, targets_true, targets_pred)
+        plot_true(cfg, varname, targets_true)
+
+        continue
         bias_fit = plot_bias(cfg, varname, targets_true, targets_pred)
 
         res_hists_bias_corrected = plot_resolution_hists(cfg, varname, targets_true, targets_pred, bias_params=bias_fit)

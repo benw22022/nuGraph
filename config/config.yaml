@@ -17,69 +17,51 @@ device: gpu
 
 # Set the path to the training data and the test/train/validation splits
 data:
-  datapath: data/10003/*.pt
-  # datapath: /home/benwilson/data/pinpointG4_data/pt/10001/*.pt
+  datapath: data/pt
   train_split: 0.7
   test_split: 0.2
   val_split: 0.1
+  # runs: [10000, 10001, 10002, 10003]
+  runs: [10002]
 
 # Set the input/output path when preprocessing the ROOT NTuples -> pytorch .pt files
 preprocessing:
-  input_dirpath: /home/benwilson/data/pinpointG4_data/root/10003/*.root
-  # output_dirpath: /home/benwilson/data/pinpointG4_data/pt/10003/
-  output_dirpath: data/10003/
-  num_bins_x: 2048  # binning for the CNN images
-  num_bins_y: 2048
-  num_bins_z: 100
-
+  runs: [10000, 10001, 10003]
+  input_dirpath: /home/benwilson/data/pinpointG4_data/root
+  output_dirpath: data/pt
+  compute_edges: False # Requires GPU
+  
 # Configure the model parameters
 model:
-  architecture: GravNet
-  hidden_dim: 64
+  architecture: FastGravNet
   n_classes: 4
+  n_targets: 8
+  embed_dim: 64
+  grav_conv_dims: [64, 64, 64]
+  propagate_dims: [16, 16, 16]
+  knn: [16, 16, 16]
+  space_dims: [4, 4, 4]
+  downsample_frac: 0.5
+  downsample_min_hits: 5000
+  input_dim: 3 # 3 for x, y, z, pos
   dropout: 0.3
-  use_scintBarsX: False
-  use_scintBarsY: False
-  node_features: 3
-  edge_cut: 0.5
-  spatial_channels:
-  layernorm: True
-  batchnorm: True
-  aggregation: mean_sum
-  hidden_activation: SiLU
-  output_activation: 
-
-  # Layer Structure
-  hidden: 256
-  n_graph_iters: 3
-  nb_node_layer: 3
-  nb_edge_layer: 3
-  concat_all_layers: True
-  layer_shape: flat
-
-  # GravNet-specific parameters
-  knn: 
-  rand_k: 
-
-  r: 0.1
-  max_knn: 16
-
-  emb_dims: 64
-  grav_weight: 3.0
-  norm_hidden: True
-  norm_embedding: True
-  self_loop: False
-
+  do_classification: False
+  do_regression: True
+  
 
 # Configure the training options
 training:
-  batch_size: 16
+  batch_size: 4
   max_epochs: 500
-  learning_rate: 0.001
-  targets: ["E_nu", "E_lep", "Eta_lep"] # the regression targets
-  # targets: ["E_nu"] # the regression targets
+  learning_rate: 1e-4
+  targets: [E_nu, E_vis, pT_miss, pT_lep, pT_jet, p_jet, p_lep, E_lep]
+  # targets: [E_nu, E_vis, pT_miss, pT_jet, p_jet]
+  # targets: [E_nu]
+  classes: None
   num_workers: 4
-  use_weights: True
+  use_weights: False
+  regression_loss_scale: 0.5 # In regr + class mode, factor to multiply the regression loss by
+  accumulate_grad_batches: 512
   
   early_stopping:
     monitor: val_loss
@@ -126,20 +108,71 @@ variables:
     unit: "GeV"
     transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
-
-  Eta_lep:
-    name: "Lepton Pseudorapidity"
-    latex: "\\eta_{\\mathrm{lep}}"
-    unit: ""
-    transformation: null
-    bins: [[0, 3], [3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
-
-  E_had: 
-    name: "Sum of Charged Hadron Energy"
-    latex: "\\sum E_{\\mathrm{chg. had}}"
+  
+  E_vis: 
+    name: "Visible Energy"
+    latex: "E_{\\mathrm{vis}}"
     unit: "GeV"
     transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  E_miss: 
+    name: "Missing Energy"
+    latex: "E_{\\mathrm{miss}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+  pT_miss: 
+    name: "Missing Transverse Momentum"
+    latex: "{p_{T}^{\\mathrm{miss}}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  pT_lep: 
+    name: "Lepton Transverse Momentum"
+    latex: "{p_{T}^{\\mathrm{lep}}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  pT_jet: 
+    name: "Jet Transverse Momentum"
+    latex: "{p_{T}^{\\mathrm{jet}}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+  
+  p_jet: 
+    name: "Jet Momentum"
+    latex: "{p^{\\mathrm{jet}}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  p_lep: 
+    name: "Lepton Momentum"
+    latex: "{p^{\\mathrm{lep}}}"
+    unit: "GeV"
+    transformation: "log10"
+    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+
+
+  # Eta_lep:
+  #   name: "Lepton Pseudorapidity"
+  #   latex: "\\eta_{\\mathrm{lep}}"
+  #   unit: ""
+  #   transformation: null
+  #   bins: [[0, 3], [3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
+
+  # E_had: 
+  #   name: "Sum of Charged Hadron Energy"
+  #   latex: "\\sum E_{\\mathrm{chg. had}}"
+  #   unit: "GeV"
+  #   transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
 
 
 exp_name: "my experiment"  # Just a string that can be set to name an experiment. 
