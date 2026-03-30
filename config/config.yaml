@@ -17,7 +17,7 @@ device: gpu
 
 # Set the path to the training data and the test/train/validation splits
 data:
-  datapath: data/pt
+  datapath: data/pt_std_nolog
   train_split: 0.7
   test_split: 0.2
   val_split: 0.1
@@ -26,16 +26,18 @@ data:
 
 # Set the input/output path when preprocessing the ROOT NTuples -> pytorch .pt files
 preprocessing:
-  runs: [10000, 10001, 10003]
+  # runs: [10000, 10001, 10003]
+  runs: [10002]
   input_dirpath: /home/benwilson/data/pinpointG4_data/root
-  output_dirpath: data/pt
+  output_dirpath: data/pt_std_p4
   compute_edges: False # Requires GPU
+  normalise: False # If true normalise the variables
   
 # Configure the model parameters
 model:
   architecture: FastGravNet
   n_classes: 4
-  n_targets: 8
+  n_targets: 16
   embed_dim: 64
   grav_conv_dims: [64, 64, 64]
   propagate_dims: [16, 16, 16]
@@ -51,17 +53,19 @@ model:
 
 # Configure the training options
 training:
-  batch_size: 4
+  batch_size: 32
   max_epochs: 500
-  learning_rate: 1e-4
-  targets: [E_nu, E_vis, pT_miss, pT_lep, pT_jet, p_jet, p_lep, E_lep]
+  learning_rate: 1e-3
+  # targets: [E_nu, E_vis, pT_miss, pT_lep, pT_jet, p_jet, p_lep, E_lep]
   # targets: [E_nu, E_vis, pT_miss, pT_jet, p_jet]
+  targets: [E_nu, pT_nu, eta_nu, phi_nu, E_lep, pT_lep, eta_lep, phi_lep, E_jet, pT_jet, eta_jet, phi_jet, E_miss, pT_miss, eta_miss, phi_miss]
   # targets: [E_nu]
   classes: None
   num_workers: 4
   use_weights: False
   regression_loss_scale: 0.5 # In regr + class mode, factor to multiply the regression loss by
-  accumulate_grad_batches: 512
+  # accumulate_grad_batches: 1024
+  load_from_checkpoint: null # Path to checkpoint to load from, if any
   
   early_stopping:
     monitor: val_loss
@@ -71,7 +75,7 @@ training:
 # Configure the testing options
 testing:
   run_dir: null  # Override this option to set the run directory
-  batch_size: 32
+  batch_size: 4
   num_workers: 16
   checkpoint_dir: lightning_logs/version_0/checkpoints # Specify the checkpoint subdirectory. You shouldn't need to change this unless you've tweaked the logging dirs
   checkpoint_filepath: null # Specify the checkpoint file directly if given
@@ -99,63 +103,63 @@ variables:
     name: "Neutrino Energy"
     latex: "E_{\\nu}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
 
   E_lep: 
     name: "Lepton Energy"
     latex: "E_{\\mathrm{lep}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
   
   E_vis: 
     name: "Visible Energy"
     latex: "E_{\\mathrm{vis}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
   
   E_miss: 
     name: "Missing Energy"
     latex: "E_{\\mathrm{miss}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
 
   pT_miss: 
     name: "Missing Transverse Momentum"
     latex: "{p_{T}^{\\mathrm{miss}}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
 
   pT_lep: 
     name: "Lepton Transverse Momentum"
     latex: "{p_{T}^{\\mathrm{lep}}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
 
   pT_jet: 
     name: "Jet Transverse Momentum"
     latex: "{p_{T}^{\\mathrm{jet}}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
   
   p_jet: 
     name: "Jet Momentum"
     latex: "{p^{\\mathrm{jet}}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
   
   p_lep: 
     name: "Lepton Momentum"
     latex: "{p^{\\mathrm{lep}}}"
     unit: "GeV"
-    transformation: "log10"
+    # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
   
 
@@ -176,3 +180,62 @@ variables:
 
 
 exp_name: "my experiment"  # Just a string that can be set to name an experiment. 
+
+
+# stats:
+#   E_nu:
+#    mean: 2.754
+#    std: 0.396
+  
+#   E_vis:
+#    mean: 2.501
+#    std: 0.552
+  
+#   pT_miss: 
+#     mean: -0.098
+#     std: 0.644
+  
+#   pT_lep:
+#     mean: -0.965
+#     std: 2.859
+  
+#   pT_jet: 
+#     mean: 0.345
+#     std: 0.618
+  
+#   p_jet: 
+#     mean: 2.353
+#     std: 0.618
+  
+#   p_lep: 
+#     mean: 0.368
+#     std: 3.628
+  
+#   E_lep: 
+#     mean: 0.368
+#     std: 3.628
+stats:
+  E_nu:
+    mean: 723.811
+    std: 499.637
+  E_vis:
+    mean: 603.272
+    std: 439.721
+  pT_miss:
+    mean: 2.554
+    std: 2.421
+  pT_lep:
+    mean: 5.437
+    std: 3.597
+  pT_jet:
+    mean: 5.444
+    std: 3.601
+  p_jet:
+    mean: 297.444
+    std: 325.912
+  p_lep:
+    mean: 426.562
+    std: 379.227
+  E_lep:
+    mean: 426.574
+    std: 379.217

@@ -20,6 +20,11 @@ from torch.nn import functional as F
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.nn import pool
 from torch_geometric.nn import GraphNorm
+from nflows.flows import Flow
+from nflows.distributions import StandardNormal
+from nflows.transforms import CompositeTransform
+from nflows.transforms.coupling import PiecewiseRationalQuadraticCouplingTransform
+from nflows.nn.nets import ResidualNet
 
 
 def make_mlp(
@@ -623,3 +628,242 @@ class NeutrinoGravNetWithRegression(nn.Module):
         graph_out = self.graph_classifier(x_pooled)
 
         return None, graph_out
+
+
+def create_mask(dim, parity):
+    """
+    parity = 0 or 1 → alternates mask pattern across layers
+    """
+    mask = torch.arange(dim) % 2
+    mask = (mask + parity) % 2
+    return mask.float()
+
+def build_flow(y_dim, context_dim):
+    transforms = []
+
+    for i in range(5):
+        transforms.append(
+            PiecewiseRationalQuadraticCouplingTransform(
+                mask=create_mask(y_dim, parity=i % 2),
+                tails="linear",
+                tail_bound=5.0,
+                transform_net_create_fn=lambda in_features, out_features: ResidualNet(
+                    in_features=in_features,
+                    out_features=out_features,
+                    hidden_features=128,
+                    context_features=context_dim,
+                    num_blocks=2,
+                ),
+
+            )
+        )
+
+    transform = CompositeTransform(transforms)
+    base_dist = StandardNormal([y_dim])
+
+    return Flow(transform, base_dist)
+
+class NeutrinoGravNetWithFlowRegression(nn.Module):
+    """
+    GravNet model for both graph-level neutrino event classification
+    and node-level hit classification.
+
+    Based on https://arxiv.org/pdf/1902.07987.pdf
+
+    Architecture:
+    - GlobalExchange: append global mean to each node
+    - 3 GravNet blocks with feature transformation MLPs
+    - Node-level classification head for hit identification
+    - Global pooling for graph-level prediction
+    - Graph-level classification head for event classification
+    """
+
+    def __init__(
+        self,
+        cfg,
+        input_dim: int = 0,
+        num_graph_classes: int = 3,
+        num_node_classes: int = 3,
+        dropout: float = 0.2,
+        n_feature_transform: int = 16,
+        out_channels: int = 16,
+        space_dimensions: int = 3,
+        propagate_dimensions: int = 16,
+        k: int = 16,
+        n_gravstack: int = 3,
+        batchnorm_momentum: float = 0.05,
+    ):
+        """
+        Args:
+            input_dim: Input feature dimension (e.g., energy only)
+            num_graph_classes: Number of graph-level classes (event classification)
+            num_node_classes: Number of node-level classes (hit classification)
+            dropout: Dropout probability
+            n_feature_transform: Hidden dimension for feature transformation MLPs
+            out_channels: Output channels from each GravNet block
+            space_dimensions: Dimensionality of learned spatial representation (S)
+            propagate_dimensions: Dimensionality of features to propagate (F_LR)
+            k: Number of nearest neighbors for aggregation
+            n_gravstack: Number of GravNet blocks
+            batchnorm_momentum: BatchNorm momentum (use 1-momentum from TF convention)
+        """
+        super().__init__()
+
+        self.cfg = cfg
+
+        # Input will be [features, x, y, z] concatenated
+        input_with_pos = input_dim + 3
+
+        # After GlobalExchange, input doubles (original + global mean)
+        initial_features = input_with_pos * 2
+
+        # GravNet stack 1
+        self.ft1_1 = nn.Linear(initial_features, n_feature_transform)
+        self.ft1_2 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.ft1_3 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.gn1 = GravNetConv(
+            in_channels=n_feature_transform,
+            out_channels=out_channels,
+            space_dimensions=space_dimensions,
+            propagate_dimensions=propagate_dimensions,
+            k=k,
+        )
+        self.bn1 = nn.BatchNorm1d(out_channels, momentum=batchnorm_momentum, affine=False)
+
+        # GravNet stack 2
+        self.ft2_1 = nn.Linear(out_channels, n_feature_transform)
+        self.ft2_2 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.ft2_3 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.gn2 = GravNetConv(
+            in_channels=n_feature_transform,
+            out_channels=out_channels,
+            space_dimensions=space_dimensions,
+            propagate_dimensions=propagate_dimensions,
+            k=k,
+        )
+        self.bn2 = nn.BatchNorm1d(out_channels, momentum=batchnorm_momentum, affine=False)
+
+        # GravNet stack 3
+        self.ft3_1 = nn.Linear(out_channels, n_feature_transform)
+        self.ft3_2 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.ft3_3 = nn.Linear(n_feature_transform, n_feature_transform)
+        self.gn3 = GravNetConv(
+            in_channels=n_feature_transform,
+            out_channels=out_channels,
+            space_dimensions=space_dimensions,
+            propagate_dimensions=propagate_dimensions,
+            k=k,
+        )
+        self.bn3 = nn.BatchNorm1d(out_channels, momentum=batchnorm_momentum, affine=False)
+
+        # After concatenating all GravNet outputs
+        concat_features = n_gravstack * out_channels
+
+        # Graph-level classification head
+        self.graph_pooling = global_mean_pool
+
+        self.context_dim = 256
+        self.context_net = nn.Sequential(
+            nn.Linear(concat_features, 128),
+            nn.ReLU(),
+            nn.Linear(128, self.context_dim),
+        )
+        
+        self.flow = build_flow(y_dim=cfg.n_targets, context_dim=self.context_dim)
+        
+
+    def forward(self, data, y=None):
+        """
+        Forward pass for both node-level and graph-level classification.
+
+        Args:
+            x: Node features [N, input_dim] (e.g., energy)
+            pos: Node positions [N, 3] (x, y, z coordinates)
+            batch: Batch assignment vector [N] for batched graphs
+
+        Returns:
+            node_out: Node predictions [N, num_node_classes]
+            graph_out: Graph predictions [batch_size, num_graph_classes]
+        """
+        x, edge_index, batch = data.x, data.edge_index, data.batch
+
+        # Create batch tensor if not provided
+        if batch is None:
+            batch = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+
+        # Concatenate features and positions
+        # x = torch.cat([x, pos], dim=-1)  # [N, input_dim + 3]
+
+        # GlobalExchange: append mean of all features to each node
+        # This provides global context to each node
+        global_mean = global_mean_pool(x, batch)  # [batch_size, input_dim + 3]
+        x = torch.cat([x, global_mean[batch]], dim=-1)  # [N, 2*(input_dim + 3)]
+
+        # List to hold outputs from each GravNet block
+        feat = []
+
+        # GravNet stack 1
+        x = F.elu(self.ft1_1(x))
+        x = F.elu(self.ft1_2(x))
+        x = torch.tanh(self.ft1_3(x))
+        x = self.gn1(x, batch)
+        x = self.bn1(x)
+        feat.append(x)
+
+        # GravNet stack 2
+        x = F.elu(self.ft2_1(x))
+        x = F.elu(self.ft2_2(x))
+        x = torch.tanh(self.ft2_3(x))
+        x = self.gn2(x, batch)
+        x = self.bn2(x)
+        feat.append(x)
+
+        # GravNet stack 3
+        x = F.elu(self.ft3_1(x))
+        x = F.elu(self.ft3_2(x))
+        x = torch.tanh(self.ft3_3(x))
+        x = self.gn3(x, batch)
+        x = self.bn3(x)
+        feat.append(x)
+
+        # Concatenate all GravNet block outputs
+        x = torch.cat(feat, dim=1)  # [N, n_gravstack * out_channels]
+
+
+        # Global pooling for graph-level prediction
+        x_pooled = self.graph_pooling(
+            x, batch
+        )  # [batch_size, n_gravstack * out_channels]
+
+
+        context = self.context_net(x_pooled)
+
+        if y is not None:
+            # TRAINING: compute log prob
+            log_prob = self.flow.log_prob(inputs=y, context=context)
+            return log_prob
+        else:
+            # INFERENCE: sample predictions
+            samples = self.flow.sample(context=context, num_samples=100, batch_size=2)
+            y_pred = samples.mean(dim=0)
+            return y_pred
+            S, B, D = samples.shape
+            samples_flat = samples.reshape(S * B, D)
+
+            context_expanded = context.unsqueeze(0).expand(S, B, -1)
+            context_flat = context_expanded.reshape(S * B, -1)
+
+            log_probs = self.flow.log_prob(samples_flat, context_flat)
+            log_probs = log_probs.view(S, B)
+
+            best_idx = torch.argmax(log_probs, dim=0)
+            y_pred_map = samples[best_idx, torch.arange(B)]
+            return y_pred_map
+            return y_pred.squeeze(1)
+
+
+    def loss(self, data, y):
+        log_prob = self.forward(data, y)
+        return -log_prob.mean()
+
+

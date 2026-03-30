@@ -13,9 +13,9 @@ from scipy.optimize import curve_fit
 import uproot
 from copy import deepcopy
 
-from source.model import FastGravNet, NeutrinoGravNetWithRegression
-from source.train import GravNetLightning
-from source.dataset import GraphDataModule
+from source.spconv_model import Sparse3DFlowRegression
+from source.train_flow import GravNetLightning
+from source.dataset import GraphDataModule, unnorm_data
 
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -86,13 +86,9 @@ def get_checkpoint_path(cfg: DictConfig):
 def run_inference(cfg, model, dataloader, device):
     model.eval()
     model.freeze()
-
-    true_classes = []
-    pred_classes = []
     
     targets_true = {t : [] for t in cfg.training.targets}
     targets_pred = {t : [] for t in cfg.training.targets}
-
 
     for batch in tqdm(dataloader, desc="Running Inference..."):
         batch = batch.to(device)
@@ -107,28 +103,44 @@ def run_inference(cfg, model, dataloader, device):
         dim=1,  # (batch, n targets)
         )
 
-        class_logits, y_pred = model(batch)
+        y_pred = model(batch)
+
+        # print(y_pred.shape)
+        # print(y_true.shape)
         
         for i, t in enumerate(cfg.training.targets):
             targets_true[t].append(y_true.cpu()[:,i].numpy())
             targets_pred[t].append(y_pred.cpu()[:,i].numpy())
+        
+        # if nb > 500: break
+
+        # break
 
     for t in cfg.training.targets:
         targets_true[t] = np.concatenate(targets_true[t])
         targets_pred[t] = np.concatenate(targets_pred[t])
-
+    
+    
+    # Apply mean, std scaling
+    if cfg.preprocessing.normalise:
+        stats = cfg.stats
+        for t in cfg.training.targets:
+            targets_true[t] = unnorm_data(targets_true[t], stats[t].mean, stats[t].std)
+            targets_pred[t] = unnorm_data(targets_pred[t], stats[t].mean, stats[t].std) 
 
     # Apply any necessary inverse transformations here
-    for t in cfg.training.targets:
-        if cfg.variables.get(t, None):
-            if cfg.variables[t].get("transformation", None) == "log10":
-                targets_true[t] = 10 ** targets_true[t]
-                targets_pred[t] = 10 ** targets_pred[t]
-            elif cfg.variables[t].get("transformation", None) == "eta":
-                targets_true[t] = 2 * np.arctan(np.exp(targets_true[t])) - np.pi/2
-                targets_pred[t] = 2 * np.arctan(np.exp(targets_pred[t])) - np.pi/2
-        
-    return (true_classes, pred_classes), (targets_true, targets_pred)
+    # for t in cfg.training.targets:
+    #     if cfg.variables.get(t, None):
+    #         if cfg.variables[t].get("transformation", None) == "log10":
+    #             targets_true[t] = 10 ** targets_true[t]
+    #             targets_pred[t] = 10 ** targets_pred[t]
+    #         elif cfg.variables[t].get("transformation", None) == "eta":
+    #             targets_true[t] = 2 * np.arctan(np.exp(targets_true[t])) - np.pi/2
+    #             targets_pred[t] = 2 * np.arctan(np.exp(targets_pred[t])) - np.pi/2
+    
+    
+
+    return targets_true, targets_pred
 
 
 def plot_resolution_hists(cfg, varname, targets_true, targets_pred, bias_params=None):
@@ -234,8 +246,8 @@ def plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False, 
     # Log-spaced bins work best here
     if logscale:
         bins = np.logspace(
-            np.log10(min(y_true.min(), y_pred.min())),
-            np.log10(max(y_true.max(), y_pred.max())),
+            np.log10(min(y_true.min(), y_pred.min()) + 1e-6),
+            np.log10(max(y_true.max(), y_pred.max()) + 1e-6),
             100,
         )
     else:
@@ -244,6 +256,10 @@ def plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False, 
             max(y_true.max(), y_pred.max()),
             100,
         )
+
+    # print(y_true)
+    # print(y_pred)
+    # print(bins)
 
     h , xedges, yedges, image= ax.hist2d(
         y_true,
@@ -258,8 +274,8 @@ def plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False, 
     # y = x reference line
     if logscale:
         x = np.logspace(
-            np.log10(y_true.min()),
-            np.log10(y_true.max()),
+            np.log10(y_true.min()+1e-6),
+            np.log10(y_true.max()+1e-6),
             100,
         )
     else:
@@ -448,6 +464,90 @@ def plot_bias(cfg, varname, targets_true, targets_pred, bias_params=None):
 
     return popt
 
+def plot_true(cfg, varname, targets_true, logscale=False, bias_params=None):
+
+    var_cfg = cfg.variables.get(varname, {})
+
+    assert var_cfg is not None, f"No config found for variable {varname}"
+
+    y_true = deepcopy(targets_true[varname])
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    if logscale:
+        bins = np.logspace(
+            np.log10(y_true.min()),
+            np.log10(y_true.max()),
+            100,
+        )
+        ax.set_xscale("log")
+    else:
+        bins = np.linspace(
+            y_true.min(),
+            y_true.max(),
+            100,
+        )
+
+    ax.hist(
+        y_true,
+        bins=bins,
+        histtype="step",
+        linewidth=1.5,
+    )
+    latex_var = var_cfg.get('latex', varname)
+    unit = var_cfg.get('unit', '')
+    ax.set_xlabel(rf"True ${latex_var}$ {unit}")
+    ax.set_ylabel("Events")
+    outfile = os.path.join(cfg.testing.run_dir, f"{varname}_TrueDist")
+    for fmt in cfg.plotting.formats:
+        extn = fmt.lower().replace(".", "")
+        plt.savefig(f"{outfile}.{extn}", dpi=300)
+    logging.info(f"Plotted {outfile}")
+
+
+
+def plot_pairwise_2dhists(targets, bins=50, cmap="viridis"):
+    keys = list(targets.keys())
+    n = len(keys)
+
+    fig, axes = plt.subplots(n, n, figsize=(3*n, 3*n))
+    
+    # Convert to numpy arrays
+    data = {k: np.asarray(v) for k, v in targets.items()}
+
+    for i in range(n):
+        for j in range(n):
+            ax = axes[i, j]
+
+            if i < j:
+                # Upper triangle: turn off
+                ax.axis("off")
+                continue
+
+            x = data[keys[j]]
+            y = data[keys[i]]
+
+            if i == j:
+                # Diagonal: 1D histogram
+                ax.hist(x, bins=bins, histtype="stepfilled", alpha=0.7)
+            else:
+                # Lower triangle: 2D histogram
+                h = ax.hist2d(x, y, bins=bins, cmap=cmap)
+
+            # Labels only on outer axes
+            if i == n - 1:
+                ax.set_xlabel(f"Log10 {keys[j]}")
+            else:
+                ax.set_xticklabels([])
+
+            if j == 0:
+                ax.set_ylabel(f"Log10 {keys[i]}")
+            else:
+                ax.set_yticklabels([])
+
+    plt.tight_layout()
+    return fig, axes
+
 def plot_true_and_reco(cfg, varname, targets_true, targets_pred, logscale=False, bias_params=None):
 
     var_cfg = cfg.variables.get(varname, {})
@@ -501,53 +601,7 @@ def plot_true_and_reco(cfg, varname, targets_true, targets_pred, logscale=False,
     logging.info(f"Plotted {outfile}")
 
 
-
-
-def plot_pairwise_2dhists(targets, bins=50, cmap="viridis"):
-    keys = list(targets.keys())
-    n = len(keys)
-
-    fig, axes = plt.subplots(n, n, figsize=(3*n, 3*n))
-    
-    # Convert to numpy arrays
-    data = {k: np.asarray(v) for k, v in targets.items()}
-
-    for i in range(n):
-        for j in range(n):
-            ax = axes[i, j]
-
-            if i < j:
-                # Upper triangle: turn off
-                ax.axis("off")
-                continue
-
-            x = data[keys[j]]
-            y = data[keys[i]]
-
-            if i == j:
-                # Diagonal: 1D histogram
-                ax.hist(x, bins=bins, histtype="stepfilled", alpha=0.7)
-            else:
-                # Lower triangle: 2D histogram
-                h = ax.hist2d(x, y, bins=bins, cmap=cmap)
-
-            # Labels only on outer axes
-            if i == n - 1:
-                ax.set_xlabel(f"Log10 {keys[j]}")
-            else:
-                ax.set_xticklabels([])
-
-            if j == 0:
-                ax.set_ylabel(f"Log10 {keys[i]}")
-            else:
-                ax.set_yticklabels([])
-
-    plt.tight_layout()
-    return fig, axes
-
-
-
-def run_testing(cfg: DictConfig):
+def run_spconv_flow_testing(cfg: DictConfig):
 
     logging.info("Starting testing...")
 
@@ -579,13 +633,13 @@ def run_testing(cfg: DictConfig):
 
     datamodule = GraphDataModule(
         pt_files=pt_files,
-        batch_size=cfg.training.batch_size,
-        num_workers=cfg.training.num_workers,
+        batch_size=cfg.testing.batch_size,
+        num_workers=cfg.testing.num_workers,
     )
     datamodule.setup()
 
     # Reconstruct model exactly as in training
-    backbone = NeutrinoGravNetWithRegression(cfg_this_run.model).to(device)
+    backbone = Sparse3DFlowRegression(cfg_this_run.model).to(device)
     model = GravNetLightning.load_from_checkpoint(
             checkpoint_path,
             model=backbone,
@@ -594,7 +648,7 @@ def run_testing(cfg: DictConfig):
     model.to(device)
 
 
-    (_, _), (targets_true, targets_pred) = run_inference(
+    targets_true, targets_pred = run_inference(
         cfg_this_run,
         model,
         datamodule.test_dataloader(),
@@ -603,11 +657,18 @@ def run_testing(cfg: DictConfig):
 
     output_file = uproot.recreate(os.path.join(cfg.testing.run_dir, cfg.testing.output_file))
 
+    plot_pairwise_2dhists(targets_true, bins=40)
+    plt.savefig(os.path.join(cfg.testing.run_dir, "TruePairwise2DHists.png"), dpi=300)
+
+    plot_pairwise_2dhists(targets_pred, bins=40)
+    plt.savefig(os.path.join(cfg.testing.run_dir, "PredPairwise2DHists.png"), dpi=300)
+
+
     for varname in cfg_this_run.training.targets:
 
         res_hists = plot_resolution_hists(cfg, varname, targets_true, targets_pred)
         # plot_resolution_vs_target(cfg, varname, targets_true, targets_pred)
-        true_v_reco = plot_true_vs_reco(cfg, varname, targets_true, targets_pred)
+        true_v_reco = plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False)
         plot_true_and_reco(cfg, varname, targets_true, targets_pred)
 
         continue

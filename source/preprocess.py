@@ -33,7 +33,9 @@ def preprocess_data(cfg):
             output_torch_path = os.path.basename(fpath).replace(".root", ".pt")
             output_torch_path = os.path.join(output_dir, output_torch_path)
 
-            dataset = GraphDataset(fpath, compute_edges=cfg.preprocessing.compute_edges)
+            stats = None if not cfg.preprocessing.normalise else cfg.stats
+
+            dataset = GraphDataset(fpath, compute_edges=cfg.preprocessing.compute_edges, stats=stats)
 
             logging.info(f"Saving dataset to {output_torch_path}")
             torch.save(dataset, output_torch_path)

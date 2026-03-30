@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import logging
 
 from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-from source.model import GravNetModel, FastGravNet, NeutrinoGravNetWithRegression
+from source.model import GravNetModel, FastGravNet, NeutrinoGravNetWithRegression, NeutrinoGravNetWithFlowRegression
 import torch.nn as nn 
 import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -20,6 +20,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
+from source.test import load_run_config
 
 
 class GravNetLightning(pl.LightningModule):
@@ -37,7 +38,6 @@ class GravNetLightning(pl.LightningModule):
         self.model = model
         self.targets = targets
         self.cls_loss = nn.CrossEntropyLoss()
-        self.reg_loss = nn.HuberLoss()
 
     def forward(self, data):
         return self.model(data)
@@ -45,7 +45,6 @@ class GravNetLightning(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
-        class_logits, target_pred = self(batch)
         
         y_true = torch.stack(
         [
@@ -55,40 +54,15 @@ class GravNetLightning(pl.LightningModule):
         dim=1,  # (batch, n targets)
         )
 
-        cls_loss, reg_loss = None, None
-        if class_logits is not None: cls_loss = self.cls_loss(class_logits, batch.y_class)
-        if target_pred is not None: reg_loss = self.reg_loss(target_pred, y_true)
-
-        loss = None
-        if reg_loss is not None:
-            loss = reg_loss
-            self.log("train_reg_loss", reg_loss.detach(), batch_size=batch.num_graphs)
-
-        if cls_loss is not None: 
-            loss = cls_loss
-            preds = torch.argmax(class_logits, dim=1)
-            acc = (preds == batch.y_class).float().mean()
-            self.log("train_cls_loss", cls_loss.detach(), batch_size=batch.num_graphs)
-            self.log("train_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
-
-        if cls_loss is not None and reg_loss is not None:
-            loss = cls_loss + self.hparams.lambda_reg * reg_loss
+        loss = self.model.loss(batch, y_true)
 
         self.log("train_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
-        
-        assert loss is not None, "Loss is None!"
 
         return loss
 
     def validation_step(self, batch, batch_idx):
         
         target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
-        class_logits, target_pred = self(batch)
-
-        # print(target_pred.float())
-        # print([t for t in self.targets])
-        # print(len(target_pred))
-        # print(target_pred.shape)
         
         y_true = torch.stack(
         [
@@ -98,28 +72,12 @@ class GravNetLightning(pl.LightningModule):
         dim=1,  # (batch, n targets)
         )
 
-        cls_loss, reg_loss = None, None
-        if class_logits is not None: cls_loss = self.cls_loss(class_logits, batch.y_class)
-        if target_pred is not None: reg_loss = self.reg_loss(target_pred, y_true)
-
-        loss = None
-        if reg_loss is not None: 
-            loss = reg_loss
-            self.log("val_reg_loss", reg_loss.detach(), batch_size=batch.num_graphs)
-
-        if cls_loss is not None: 
-            loss = cls_loss
-            preds = torch.argmax(class_logits, dim=1)
-            acc = (preds == batch.y_class).float().mean()
-            self.log("val_cls_loss", cls_loss.detach(), batch_size=batch.num_graphs)
-            self.log("val_acc", acc.detach(), prog_bar=True, batch_size=batch.num_graphs)
-
-        if cls_loss is not None and reg_loss is not None:
-            loss = cls_loss + self.hparams.lambda_reg * reg_loss
-
-        assert loss is not None, "Loss is None!"
+        loss = self.model.loss(batch, y_true)
 
         self.log("val_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
+
+        return loss
+        
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), self.lr)
@@ -173,7 +131,7 @@ class GravNetLightning(pl.LightningModule):
         self.log("lr", lr, prog_bar=True)
 
 
-def run_training(cfg):
+def run_flow_training(cfg):
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
@@ -198,7 +156,7 @@ def run_training(cfg):
     )
 
     model = GravNetLightning(
-        model=NeutrinoGravNetWithRegression(cfg.model).to(device),
+        model=NeutrinoGravNetWithFlowRegression(cfg.model).to(device),
         targets=cfg.training.targets,
         lr=cfg.training.learning_rate,
         lambda_reg=cfg.training.regression_loss_scale,
@@ -228,9 +186,62 @@ def run_training(cfg):
         logger=logger,
         log_every_n_steps=5,
         # precision="16-mixed",
-        accumulate_grad_batches=cfg.training.accumulate_grad_batches,
+        # accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         # gradient_clip_val=1.0
     )
 
     trainer.fit(model, datamodule=datamodule)
     
+    # trainer.test(model, datamodule=datamodule)
+
+    # model = GravNetLightning(
+    #     model=FastGravNet(3),
+    #     lr=1e-3,
+    # )
+
+    # # logger = TensorBoardLogger()
+    #         # save_dir=cfg.logging.log_dir,
+    #         # save_dir=hydra.core.hydra_config.HydraConfig.get().runtime.output_dir,    )
+
+    # pt_files = glob.glob("data/pt/*/*.pt")
+    # assert len(pt_files) > 0, "No .pt files found" 
+
+    # datamodule = GraphDataModule(
+    #     pt_files=pt_files,
+    #     batch_size=8,
+    #     num_workers=16,
+    # )
+
+
+    # checkpoint_cb = ModelCheckpoint(
+    #     monitor="val_loss",
+    #     save_top_k=1,
+    #     mode="min",
+    # )  
+
+    # early_stop_cb = EarlyStopping(
+    # monitor="val_loss",
+    # min_delta=0,
+    # patience=12,
+    # mode="min",
+    # verbose=True,
+    # )
+    
+    # # datamodule.setup()
+    # # for batch in datamodule.train_dataloader():
+    # #     print(batch.y_class.min(), batch.y_class.max())
+    #     # break
+
+
+    # trainer = Trainer(
+    #     max_epochs=1000,
+    #     accelerator="gpu" if torch.cuda.is_available() else "cpu",
+    #     devices=1,
+    #     callbacks=[checkpoint_cb, early_stop_cb],
+    #     log_every_n_steps=50,
+    #     accumulate_grad_batches=8,
+    #     benchmark=True,
+    #     precision="16-mixed",
+    # )
+
+    # trainer.fit(model, datamodule=datamodule)
