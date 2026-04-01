@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import logging
 
 from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-from source.spconv_model import Sparse3DFlowRegression
+from source.diffusion_model import DiffusionSchedule, SparseDiffusionModel, q_sample
 import torch.nn as nn 
 import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -21,7 +21,7 @@ import pytorch_lightning as pl
 from pytorch_lightning import Trainer
 from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 from source.test import load_run_config
-
+import spconv.pytorch as spconv
 
 class GravNetLightning(pl.LightningModule):
     def __init__(
@@ -30,6 +30,8 @@ class GravNetLightning(pl.LightningModule):
         targets=["E_nu"],
         lr=1e-3,
         lambda_reg=0.25,
+        T=1000,
+        stats=None,
     ):
         super().__init__()
         self.lr = lr
@@ -37,47 +39,87 @@ class GravNetLightning(pl.LightningModule):
 
         self.model = model
         self.targets = targets
+        self.schedule = DiffusionSchedule(T=T)
+
         # self.reg_loss = nn.HuberLoss()
         # self.reg_loss = nn.MSELoss()
 
-    def forward(self, data):
-        return self.model(data)
+    def forward(self, sparse_tensor, y_t, t):
+        return self.model(sparse_tensor, y_t, t)
 
-    def training_step(self, batch, batch_idx):
+    
+    def setup(self, stage=None):
+        # move schedule to correct device
+        self.schedule = self.schedule.to(self.device)
 
-        target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
-        
-        y_true = torch.stack(
-        [
-            target_truth[t].float()
-            for t in self.targets
-        ],
-        dim=1,  # (batch, n targets)
+    def _prepare_batch(self, batch):
+        """
+        Convert your PyG-like batch into:
+        - SparseConvTensor
+        - target tensor y
+        """
+
+        coords = batch.x.int()   # [N, 3] → (x,y,z)
+        batch_idx = batch.batch.unsqueeze(1)
+
+        # spconv expects (batch, z, y, x)
+        indices = torch.cat([batch_idx, coords[:, [2,1,0]]], dim=1)
+        indices = indices.to(torch.int32)
+
+        features = torch.ones(coords.shape[0], 1, device=self.device)
+
+        sparse_tensor = spconv.SparseConvTensor(
+            features=features,
+            indices=indices,
+            spatial_shape=[128,128,128],  # adjust!
+            # spatial_shape=[2048, 2048, 2048],  # adjust!
+            batch_size=batch.num_graphs,
         )
 
-        loss = self.model.loss(batch, y_true)
+        target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
+        y_true = torch.stack(
+            [
+                target_truth[t].float()
+                for t in self.targets
+            ],
+            dim=1,  # (batch, n targets)
+            )
+        return sparse_tensor, y_true
+    
 
-        self.log("train_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
+    def training_step(self, batch, batch_idx):
+        sparse_tensor, y0 = self._prepare_batch(batch)
+
+        B = y0.size(0)
+        device = y0.device
+
+        t = torch.randint(0, self.schedule.T, (B,), device=device)
+
+        y_t, noise = q_sample(y0, t, self.schedule)
+
+        noise_pred = self(sparse_tensor, y_t, t)
+
+        loss = F.mse_loss(noise_pred, noise)
+
+        self.log("train_loss", loss, prog_bar=True, on_step=True, on_epoch=True, batch_size=batch.num_graphs)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        
-        target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
-        
-        y_true = torch.stack(
-        [
-            target_truth[t].float()
-            for t in self.targets
-        ],
-        dim=1,  # (batch, n targets)
-        )
+        sparse_tensor, y0 = self._prepare_batch(batch)
 
-        loss = self.model.loss(batch, y_true)
+        B = y0.size(0)
+        device = y0.device
 
-        self.log("val_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
+        t = torch.randint(0, self.schedule.T, (B,), device=device)
 
-        return loss
+        y_t, noise = q_sample(y0, t, self.schedule)
+        noise_pred = self(sparse_tensor, y_t, t)
+
+        loss = F.mse_loss(noise_pred, noise)
+
+        self.log("val_loss", loss, prog_bar=True, batch_size=batch.num_graphs)
+
         
 
     def configure_optimizers(self):
@@ -98,41 +140,39 @@ class GravNetLightning(pl.LightningModule):
             },
         }
 
+    @torch.no_grad()
+    def sample(self, batch):
+        sparse_tensor, _ = self._prepare_batch(batch)
+
+        context = self.model.encoder(sparse_tensor)
+
+        B = context.size(0)
+        y_dim = len(self.targets)
+        device = context.device
+
+        y_t = torch.randn(B, y_dim, device=device)
+
+        for t in reversed(range(self.schedule.T)):
+            t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
+
+            noise_pred = self.model.diffusion(y_t, t_tensor, context)
+
+            alpha = self.schedule.alpha[t]
+            alpha_bar = self.schedule.alpha_bar[t]
+            beta = self.schedule.beta[t]
+
+            noise = torch.randn_like(y_t) if t > 0 else 0
+
+            y_t = (
+                (1 / torch.sqrt(alpha)) *
+                (y_t - (1 - alpha) / torch.sqrt(1 - alpha_bar) * noise_pred)
+                + torch.sqrt(beta) * noise
+            )
+
+        return y_t
 
 
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.AdamW(self.parameters(), self.lr)
-
-    #     warmup = LinearLR(
-    #         optimizer,
-    #         start_factor=self.lr * 0.001,
-    #         end_factor=1.0,
-    #         total_iters=1000
-    #     )
-
-    #     cosine = CosineAnnealingLR(optimizer, T_max=20000)
-
-    #     scheduler = SequentialLR(
-    #         optimizer,
-    #         schedulers=[warmup, cosine],
-    #         milestones=[1000]
-    #     )
-
-    #     return {
-    #         "optimizer": optimizer,
-    #         "lr_scheduler": {
-    #             "scheduler": scheduler,
-    #             "interval": "step",
-    #         },
-    #     }
-    
-    def on_train_epoch_end(self):
-        opt = self.optimizers()
-        lr = opt.param_groups[0]["lr"]
-        self.log("lr", lr, prog_bar=True)
-
-
-def run_spconv_flow_training(cfg):
+def run_diffusion_training(cfg):
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logging.info(f"Using device: {device}")
@@ -157,7 +197,7 @@ def run_spconv_flow_training(cfg):
     )
 
     model = GravNetLightning(
-        model=Sparse3DFlowRegression(cfg.model).to(device),
+        model=SparseDiffusionModel(cfg.model.n_targets, input_channels=1).to(device),
         targets=cfg.training.targets,
         lr=cfg.training.learning_rate,
         lambda_reg=cfg.training.regression_loss_scale,

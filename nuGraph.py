@@ -11,6 +11,8 @@ from source.train_spconv import run_spconv_training
 from source.test_spconv import run_spconv_testing
 from source.test_spconv_flow import run_spconv_flow_testing
 from source.train_spconv_flow import run_spconv_flow_training
+from source.train_diffusion import run_diffusion_training
+from source.test_diffusion import run_diffusion_testing
 
 @hydra.main(config_path="config", config_name="config", version_base="1.2")
 def my_app(cfg: DictConfig) -> None:
@@ -46,6 +48,12 @@ def my_app(cfg: DictConfig) -> None:
 
     elif cfg.mode.lower() == "test_spconv_flow":
         run_spconv_flow_testing(cfg)
+    
+    elif cfg.mode.lower() == "train_diffusion":
+        run_diffusion_training(cfg)
+   
+    elif cfg.mode.lower() == "test_diffusion":
+        run_diffusion_testing(cfg)
 
     else:
         logging.error(f"Unknown mode: {cfg.mode}")

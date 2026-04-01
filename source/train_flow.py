@@ -186,7 +186,7 @@ def run_flow_training(cfg):
         logger=logger,
         log_every_n_steps=5,
         # precision="16-mixed",
-        # accumulate_grad_batches=cfg.training.accumulate_grad_batches,
+        accumulate_grad_batches=cfg.training.accumulate_grad_batches,
         # gradient_clip_val=1.0
     )
 

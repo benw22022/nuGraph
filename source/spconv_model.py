@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from typing import Tuple
 import logging
 from torch_scatter import scatter_add
-from source.model import build_flow
+from source.model import build_flow, generate_masks
 
 def build_sparse_projections(
     data,
@@ -92,7 +92,7 @@ class SparseCNNProjectionNetwork(nn.Module):
                         prev_c, c, kernel_size,
                         padding=padding,
                         bias=False,
-                        indice_key=f"subm{i}"   # ✅ important
+                        indice_key=f"subm{i}"  
                     ),
                     nn.BatchNorm1d(c),
                     nn.ReLU(),
@@ -298,7 +298,7 @@ class Sparse3DCNN(nn.Module):
         self,
         in_channels=1,
         base_channels=16,
-        feature_dim=128,
+        feature_dim=64,
         dropout=0.3,
     ):
         super().__init__()
@@ -383,7 +383,7 @@ class Sparse3DRegression(nn.Module):
         self.regressor = nn.Sequential(*layers)
 
     def forward(self, data):
-        x = build_sparse_3d(data, grid_size=(128, 128, 64))
+        x = build_sparse_3d(data, grid_size=(128*2, 128*2, 128*2))
         feats = self.backbone(x)
         return self.regressor(feats)
 
@@ -392,29 +392,30 @@ class Sparse3DFlowRegression(nn.Module):
     def __init__(
         self,
         cfg,
-        feature_dim=128,
-        fc_dims=(128,),
-        num_targets=8,
+        feature_dim=64,
         dropout=0.3,
+        batch_size=4,
     ):
         super().__init__()
 
         self.backbone = Sparse3DCNN(feature_dim=feature_dim, dropout=dropout)
 
-        self.context_dim = 256
+        self.context_dim = 64
         self.context_net = nn.Sequential(
-            nn.Linear(feature_dim, 128),
+            nn.Linear(feature_dim, 64),
             nn.ReLU(),
-            nn.Linear(128, self.context_dim),
+            nn.Linear(64, self.context_dim),
         )
-        
-        self.flow = build_flow(y_dim=cfg.n_targets, context_dim=self.context_dim)
+        nlayers = 10
+        masks = generate_masks(cfg.n_targets, nlayers)
+        self.flow = build_flow(y_dim=cfg.n_targets, context_dim=self.context_dim, nlayers=nlayers, masks=masks)
 
         self.adaln = AdaNorm(self.context_dim)
+        self.batch_size = batch_size
 
     def forward(self, data, y=None):
         
-        x = build_sparse_3d(data, grid_size=(128, 128, 64))
+        x = build_sparse_3d(data, grid_size=(128*2, 128*2, 128*2))
         feats = self.backbone(x)
         context = self.context_net(feats)
         context = self.adaln(context)
@@ -425,7 +426,7 @@ class Sparse3DFlowRegression(nn.Module):
             return log_prob
         else:
             # INFERENCE: sample predictions
-            samples = self.flow.sample(context=context, num_samples=100, batch_size=4)
+            samples = self.flow.sample(context=context, num_samples=32, batch_size=self.batch_size)
             y_pred = samples.mean(dim=0)
             # return y_pred
             S, B, D = samples.shape
@@ -445,3 +446,132 @@ class Sparse3DFlowRegression(nn.Module):
     def loss(self, data, y):
         log_prob = self.forward(data, y)
         return -log_prob.mean()
+
+
+import torch
+
+class DiffusionSchedule:
+    def __init__(self, T=1000, beta_start=1e-4, beta_end=0.02):
+        self.T = T
+        self.beta = torch.linspace(beta_start, beta_end, T)
+        self.alpha = 1.0 - self.beta
+        self.alpha_bar = torch.cumprod(self.alpha, dim=0)
+
+    def to(self, device):
+        self.beta = self.beta.to(device)
+        self.alpha = self.alpha.to(device)
+        self.alpha_bar = self.alpha_bar.to(device)
+        return self
+    
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ConditionalDenoiser(nn.Module):
+    def __init__(self, y_dim, context_dim, hidden_dim=256):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(y_dim + context_dim + 1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, y_dim)
+        )
+
+    def forward(self, y_t, t, context):
+        # normalize timestep
+        t = t.float().unsqueeze(-1) / 1000.0
+
+        x = torch.cat([y_t, context, t], dim=-1)
+        return self.net(x)
+
+
+def q_sample(y0, t, schedule, noise=None):
+    if noise is None:
+        noise = torch.randn_like(y0)
+
+    alpha_bar_t = schedule.alpha_bar[t].unsqueeze(-1)
+
+    return (
+        torch.sqrt(alpha_bar_t) * y0 +
+        torch.sqrt(1 - alpha_bar_t) * noise
+    ), noise
+
+
+class Sparse3DDiffusionRegression(nn.Module):
+    def __init__(
+        self,
+        cfg,
+        feature_dim=64,
+        dropout=0.3,
+        batch_size=4,
+    ):
+        super().__init__()
+
+        self.backbone = Sparse3DCNN(feature_dim=feature_dim, dropout=dropout)
+
+        self.context_dim = 64
+        self.context_net = nn.Sequential(
+            nn.Linear(feature_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, self.context_dim),
+        )
+    
+        self.diffusion = ConditionalDenoiser(y_dim=cfg.n_targets, context_dim=self.context_dim, hidden_dim=128)
+        self.schedule = DiffusionSchedule(T=1000, beta_start=1e-4, beta_end=0.02)
+
+        self.adaln = AdaNorm(self.context_dim)
+        self.batch_size = batch_size
+
+    def forward(self, data, y0=None):
+        
+        x = build_sparse_3d(data, grid_size=(128*2, 128*2, 128*2))
+        feats = self.backbone(x)
+        context = self.context_net(feats)
+        context = self.adaln(context)
+
+        if y0 is not None:
+            B = y0.size(0)
+            device = y0.device
+
+            t = torch.randint(0, self.schedule.T, (B,), device=device)
+
+            y_t, noise = q_sample(y0, t, self.schedule)
+
+            noise_pred = self.diffusion(y_t, t, context)
+
+            return F.mse_loss(noise_pred, noise)
+
+        else:
+            return self.sample(context)
+
+        
+
+    @torch.no_grad()
+    def sample(self, context):
+        B, y_dim = context.size(0), self.diffusion.net[-1].out_features
+        device = self.device
+
+        y_t = torch.randn(B, y_dim, device=device)
+
+        for t in reversed(range(self.schedule.T)):
+            t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
+
+            noise_pred = self.diffusion(y_t, t_tensor, context)
+
+            alpha = self.schedule.alpha[t]
+            alpha_bar = self.schedule.alpha_bar[t]
+            beta = self.schedule.beta[t]
+
+            if t > 0:
+                noise = torch.randn_like(y_t)
+            else:
+                noise = 0
+
+            y_t = (
+                (1 / torch.sqrt(alpha)) *
+                (y_t - (1 - alpha) / torch.sqrt(1 - alpha_bar) * noise_pred)
+                + torch.sqrt(beta) * noise
+            )
+
+        return y_t

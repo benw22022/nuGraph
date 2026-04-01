@@ -638,15 +638,72 @@ def create_mask(dim, parity):
     mask = (mask + parity) % 2
     return mask.float()
 
-def build_flow(y_dim, context_dim):
+# def build_flow(y_dim, context_dim):
+#     transforms = []
+
+#     for i in range(3):
+#         transforms.append(
+#             PiecewiseRationalQuadraticCouplingTransform(
+#                 mask=create_mask(y_dim, parity=i % 2),
+#                 tails="linear",
+#                 tail_bound=30,
+#                 transform_net_create_fn=lambda in_features, out_features: ResidualNet(
+#                     in_features=in_features,
+#                     out_features=out_features,
+#                     hidden_features=64,
+#                     context_features=context_dim,
+#                     num_blocks=2,
+#                 ),
+
+#             )
+#         )
+#     transform = CompositeTransform(transforms)
+#     base_dist = StandardNormal([y_dim])
+
+#     return Flow(transform, base_dist)
+
+
+from nflows.transforms import RandomPermutation
+
+from nflows.transforms import RandomPermutation, LULinear
+def create_random_mask(dim):
+
+    mask = torch.randint(0, 2, (dim,))
+    
+    # ensure not all 0 or all 1
+    if mask.sum() == 0:
+        mask[0] = 1
+    if mask.sum() == dim:
+        mask[0] = 0
+        
+    return mask.float()
+
+def generate_masks(y_dim, num_layers, seed=42):
+    g = torch.Generator()
+    g.manual_seed(seed)
+
+    masks = []
+    for _ in range(num_layers):
+        mask = torch.randint(0, 2, (y_dim,), generator=g)
+
+        if mask.sum() == 0:
+            mask[0] = 1
+        if mask.sum() == y_dim:
+            mask[0] = 0
+
+        masks.append(mask.float())
+
+    return masks
+
+def build_flow(y_dim, context_dim, nlayers, masks):
     transforms = []
 
-    for i in range(5):
+    for i in range(nlayers):  # deeper
         transforms.append(
             PiecewiseRationalQuadraticCouplingTransform(
-                mask=create_mask(y_dim, parity=i % 2),
+                mask=masks[i],
                 tails="linear",
-                tail_bound=5.0,
+                tail_bound=30,
                 transform_net_create_fn=lambda in_features, out_features: ResidualNet(
                     in_features=in_features,
                     out_features=out_features,
@@ -654,15 +711,11 @@ def build_flow(y_dim, context_dim):
                     context_features=context_dim,
                     num_blocks=2,
                 ),
-
             )
         )
+        transforms.append(LULinear(y_dim))
 
-    transform = CompositeTransform(transforms)
-    base_dist = StandardNormal([y_dim])
-
-    return Flow(transform, base_dist)
-
+    return Flow(CompositeTransform(transforms), StandardNormal([y_dim]))
 class NeutrinoGravNetWithFlowRegression(nn.Module):
     """
     GravNet model for both graph-level neutrino event classification

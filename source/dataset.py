@@ -118,24 +118,19 @@ class GraphDataset(Dataset):
             col = hit_col[idx][0]
             layer = hit_layer[idx][0]
 
-            col = col / (np.amax(col) + 1e-6)
-            row = row / (np.amax(row) + 1e-6)
-            layer = layer / (np.amax(layer) + 1e-6)
+            # col = col / (np.amax(col) + 1e-6)
+            # row = row / (np.amax(row) + 1e-6)
+            # layer = layer / (np.amax(layer) + 1e-6)
+
+            col = (col - np.mean(col)) / (np.std(col) + 1e-6)
+            row = (row - np.mean(row)) / (np.std(row) + 1e-6)
+            layer = (layer - np.mean(layer)) / (np.std(layer) + 1e-6)
 
             x = np.stack([row, col, layer], axis=1).astype(np.float32)
             
             E_nu, nu_pdg, process, vx, vy, vz, nu_px, nu_py, nu_pz = truth_map[evt]
-            # E_nu = np.log10(E_nu) # Convert Mev -> GeV and take log
-
-            E_vis = 0
-            E_lep = 0
-            pT_miss = 0
-            p_jet = 0
-            pT_jet = 0
-            p_lep = 0
-            pT_lep = 0
             
-            p4_nu = vector.obj(px=nu_px, py=nu_py, pz=nu_pz, E=E_nu)
+            p4_nu = vector.obj(px=nu_px/1000, py=nu_py/1000, pz=nu_pz/1000, E=E_nu/1000)
             p4_lep = vector.obj(px=0, py=0, pz=0, E=0)
             p4_jet = vector.obj(px=0, py=0, pz=0, E=0)
             p4_jet_vis = vector.obj(px=0, py=0, pz=0, E=0)
@@ -146,15 +141,13 @@ class GraphDataset(Dataset):
             prim_pdg, prim_charge, prim_px, prim_py, prim_pz, prim_E = primaries_map.get(evt, [])
             for pdg, q, px, py, pz, E in zip(prim_pdg, prim_charge, prim_px, prim_py, prim_pz, prim_E):
                 if abs(pdg) in [12, 14, 16]: # neutrinos
-                    p4_miss += vector.obj(px=px, py=py, pz=pz, E=E)
-                if abs(pdg) in [11, 13, 15]: # leptons
-                    p4_lep += vector.obj(px=px, py=py, pz=pz, E=E)
-                    # p4_miss += vector.obj(px=-px, py=-py, pz=-pz, E=E)
+                    p4_miss += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, E=E/1000)
+                elif abs(pdg) in [11, 13, 15]: # leptons
+                    p4_lep += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, E=E/1000)
                 else: # hadrons - the jet
-                    p4_jet += vector.obj(px=px, py=py, pz=pz, E=E)
-                    # p4_miss += vector.obj(px=-px, py=-py, pz=-pz, E=E)
+                    p4_jet += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, E=E/1000)
                     if q != 0:
-                        p4_jet_vis += vector.obj(px=px, py=py, pz=pz, E=E)
+                        p4_jet_vis += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, E=E/1000)
 
             # Tau data
             n_prongs = 0
@@ -177,7 +170,7 @@ class GraphDataset(Dataset):
                         continue
 
                     if abs(pdg) in [12, 14, 16]: # neutrinos
-                        p4_miss += vector.obj(px=px, py=py, pz=pz, mass=0)
+                        p4_miss += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, mass=0)
                     
                     if abs(pdg) == 12:
                         tau_decay_mode = 1
@@ -201,15 +194,15 @@ class GraphDataset(Dataset):
                     charm_decay_prods["Pz"],
                 ):
                     if abs(pdg) in [12, 14, 16]: # neutrinos
-                        p4_miss += vector.obj(px=px, py=py, pz=pz, mass=0)
+                        p4_miss += vector.obj(px=px/1000, py=py/1000, pz=pz/1000, mass=0)
             
-            E_vis = p4_jet_vis.E + p4_lep.E
-            pT_miss = p4_miss.pt
-            pT_lep = p4_lep.pt
-            pT_jet = p4_jet.pt
-            p_jet = p4_jet.p
-            p_lep = p4_lep.p
-            E_lep = p4_lep.E
+            # E_vis = p4_jet_vis.E + p4_lep.E
+            # pT_miss = p4_miss.pt
+            # pT_lep = p4_lep.pt
+            # pT_jet = p4_jet.pt
+            # p_jet = p4_jet.p
+            # p_lep = p4_lep.p
+            # E_lep = p4_lep.E
 
             # px_nu = p4_nu.px / 1000
             # py_nu = p4_nu.py / 1000
@@ -244,25 +237,56 @@ class GraphDataset(Dataset):
             # E_vis = np.log10(E_vis/1000 + 1e-6)
 
             # Normalise
-            pT_miss /= 1000
-            pT_lep  /= 1000
-            pT_jet  /= 1000
-            p_lep   /= 1000
-            p_jet   /= 1000
-            E_vis   /= 1000
-            E_nu    /= 1000
-            E_lep   /= 1000
+            # pT_miss /= 1000
+            # pT_lep  /= 1000
+            # pT_jet  /= 1000
+            # p_lep   /= 1000
+            # p_jet   /= 1000
+            # E_vis   /= 1000
+            # E_nu    /= 1000
+            # E_lep   /= 1000
 
             if stats is not None:
-                pT_miss = norm_data(pT_miss, stats.pT_miss.mean, stats.pT_miss.std)
-                pT_lep = norm_data(pT_lep, stats.pT_lep.mean, stats.pT_lep.std)
-                pT_jet = norm_data(pT_jet, stats.pT_jet.mean, stats.pT_jet.std)
-                p_lep = norm_data(p_lep, stats.p_lep.mean, stats.p_lep.std)
-                p_jet = norm_data(p_jet, stats.p_jet.mean, stats.p_jet.std)
-                E_lep = norm_data(E_lep, stats.E_lep.mean, stats.E_lep.std)
-                E_vis = norm_data(E_vis, stats.E_vis.mean, stats.E_vis.std)
-                E_nu = norm_data(E_nu, stats.E_nu.mean, stats.E_nu.std)
-                
+
+                p4_nu_E = norm_data(p4_nu.E, stats["E_nu"]["mean"], stats["E_nu"]["std"])
+                p4_nu_pt = norm_data(p4_nu.pt, stats["pT_nu"]["mean"], stats["pT_nu"]["std"])
+                p4_nu_eta = norm_data(p4_nu.eta, stats["eta_nu"]["mean"], stats["eta_nu"]["std"])
+                p4_nu_phi = norm_data(p4_nu.phi, stats["phi_nu"]["mean"], stats["phi_nu"]["std"])
+
+                p4_lep_E = norm_data(p4_lep.E, stats["E_lep"]["mean"], stats["E_lep"]["std"])
+                p4_lep_pt = norm_data(p4_lep.pt, stats["pT_lep"]["mean"], stats["pT_lep"]["std"])
+                p4_lep_eta = norm_data(p4_lep.eta, stats["eta_lep"]["mean"], stats["eta_lep"]["std"])
+                p4_lep_phi = norm_data(p4_lep.phi, stats["phi_lep"]["mean"], stats["phi_lep"]["std"])
+
+                p4_jet_E = norm_data(p4_jet.E, stats["E_jet"]["mean"], stats["E_jet"]["std"])
+                p4_jet_pt = norm_data(p4_jet.pt, stats["pT_jet"]["mean"], stats["pT_jet"]["std"])
+                p4_jet_eta = norm_data(p4_jet.eta, stats["eta_jet"]["mean"], stats["eta_jet"]["std"])
+                p4_jet_phi = norm_data(p4_jet.phi, stats["phi_jet"]["mean"], stats["phi_jet"]["std"])
+
+                p4_miss_E = norm_data(p4_miss.E, stats["E_miss"]["mean"], stats["E_miss"]["std"])
+                p4_miss_pt = norm_data(p4_miss.pt, stats["pT_miss"]["mean"], stats["pT_miss"]["std"])
+                p4_miss_eta = norm_data(p4_miss.eta, stats["eta_miss"]["mean"], stats["eta_miss"]["std"])
+                p4_miss_phi = norm_data(p4_miss.phi, stats["phi_miss"]["mean"], stats["phi_miss"]["std"])
+            else:
+                p4_nu_E = p4_nu.E
+                p4_nu_pt = p4_nu.pt
+                p4_nu_eta = p4_nu.eta
+                p4_nu_phi = p4_nu.phi
+    
+                p4_lep_E = p4_lep.E
+                p4_lep_pt = p4_lep.pt
+                p4_lep_eta = p4_lep.eta
+                p4_lep_phi = p4_lep.phi
+    
+                p4_jet_E = p4_jet.E
+                p4_jet_pt = p4_jet.pt
+                p4_jet_eta = p4_jet.eta
+                p4_jet_phi = p4_jet.phi
+    
+                p4_miss_E = p4_miss.E
+                p4_miss_pt = p4_miss.pt
+                p4_miss_eta = p4_miss.eta
+                p4_miss_phi = p4_miss.phi
                 
             # Work out the interaction type for classification - CC nu_mu, CC nu_e, CC nu_tau or NC
             if "NC" in process:
@@ -276,25 +300,33 @@ class GraphDataset(Dataset):
             data = Data( 
                 x=torch.from_numpy(x),
                 interaction=torch.tensor(interaction),
-                pT_nu = torch.tensor(p4_nu.pt / 1000, dtype=torch.float32),
-                eta_nu = torch.tensor(p4_nu.eta, dtype=torch.float32),
-                phi_nu = torch.tensor(p4_nu.phi, dtype=torch.float32),
-                E_nu=torch.tensor(p4_nu.E / 1000, dtype=torch.float32),
+                pT_nu = torch.tensor(p4_nu_pt, dtype=torch.float32),
+                eta_nu = torch.tensor(p4_nu_eta, dtype=torch.float32),
+                phi_nu = torch.tensor(p4_nu_phi, dtype=torch.float32),
+                sin_phi_nu = torch.tensor(np.sin(p4_nu.phi), dtype=torch.float32),
+                cos_phi_nu = torch.tensor(np.cos(p4_nu.phi), dtype=torch.float32),
+                E_nu=torch.tensor(p4_nu_E, dtype=torch.float32),
 
-                pT_lep=torch.tensor(p4_lep.pt / 1000, dtype=torch.float32),
-                eta_lep=torch.tensor(p4_lep.eta, dtype=torch.float32),
-                phi_lep=torch.tensor(p4_lep.phi, dtype=torch.float32),
-                E_lep=torch.tensor(p4_lep.E / 1000, dtype=torch.float32),
+                pT_lep=torch.tensor(p4_lep_pt, dtype=torch.float32),
+                eta_lep=torch.tensor(p4_lep_eta, dtype=torch.float32),
+                phi_lep=torch.tensor(p4_lep_phi, dtype=torch.float32),
+                sin_phi_lep=torch.tensor(np.sin(p4_lep.phi), dtype=torch.float32),
+                cos_phi_lep=torch.tensor(np.cos(p4_lep.phi), dtype=torch.float32),
+                E_lep=torch.tensor(p4_lep_E, dtype=torch.float32),
 
-                pT_jet=torch.tensor(p4_jet.pt / 1000, dtype=torch.float32),
-                eta_jet=torch.tensor(p4_jet.eta, dtype=torch.float32),
-                phi_jet=torch.tensor(p4_jet.phi, dtype=torch.float32),
-                E_jet=torch.tensor(p4_jet.E / 1000, dtype=torch.float32),
+                pT_jet=torch.tensor(p4_jet_pt, dtype=torch.float32),
+                eta_jet=torch.tensor(p4_jet_eta, dtype=torch.float32),
+                phi_jet=torch.tensor(p4_jet_phi, dtype=torch.float32),
+                sin_phi_jet=torch.tensor(np.sin(p4_jet.phi), dtype=torch.float32),
+                cos_phi_jet=torch.tensor(np.cos(p4_jet.phi), dtype=torch.float32),
+                E_jet=torch.tensor(p4_jet_E, dtype=torch.float32),
 
-                pT_miss=torch.tensor(pT_miss / 1000, dtype=torch.float32),
-                eta_miss=torch.tensor(p4_miss.eta, dtype=torch.float32),
-                phi_miss=torch.tensor(p4_miss.phi, dtype=torch.float32),
-                E_miss=torch.tensor(p4_miss.E / 1000, dtype=torch.float32),
+                pT_miss=torch.tensor(p4_miss_pt, dtype=torch.float32),
+                eta_miss=torch.tensor(p4_miss_eta, dtype=torch.float32),
+                phi_miss=torch.tensor(p4_miss_phi, dtype=torch.float32),
+                sin_phi_miss=torch.tensor(np.sin(p4_miss.phi), dtype=torch.float32),
+                cos_phi_miss=torch.tensor(np.cos(p4_miss.phi), dtype=torch.float32),
+                E_miss=torch.tensor(p4_miss_E, dtype=torch.float32),
 
                 # E_vis=torch.tensor(E_vis, dtype=torch.float32),
                 # pT_miss=torch.tensor(pT_miss, dtype=torch.float32),

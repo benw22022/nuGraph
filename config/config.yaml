@@ -17,7 +17,7 @@ device: gpu
 
 # Set the path to the training data and the test/train/validation splits
 data:
-  datapath: data/pt_std_nolog
+  datapath: data/pt_std_p4-3
   train_split: 0.7
   test_split: 0.2
   val_split: 0.1
@@ -29,9 +29,9 @@ preprocessing:
   # runs: [10000, 10001, 10003]
   runs: [10002]
   input_dirpath: /home/benwilson/data/pinpointG4_data/root
-  output_dirpath: data/pt_std_p4
+  output_dirpath: data/pt_std_p4-3
   compute_edges: False # Requires GPU
-  normalise: False # If true normalise the variables
+  normalise: True # If true normalise the variables
   
 # Configure the model parameters
 model:
@@ -64,7 +64,7 @@ training:
   num_workers: 4
   use_weights: False
   regression_loss_scale: 0.5 # In regr + class mode, factor to multiply the regression loss by
-  # accumulate_grad_batches: 1024
+  accumulate_grad_batches: 2048
   load_from_checkpoint: null # Path to checkpoint to load from, if any
   
   early_stopping:
@@ -75,7 +75,7 @@ training:
 # Configure the testing options
 testing:
   run_dir: null  # Override this option to set the run directory
-  batch_size: 4
+  batch_size: 32
   num_workers: 16
   checkpoint_dir: lightning_logs/version_0/checkpoints # Specify the checkpoint subdirectory. You shouldn't need to change this unless you've tweaked the logging dirs
   checkpoint_filepath: null # Specify the checkpoint file directly if given
@@ -106,19 +106,103 @@ variables:
     # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
 
+  pT_nu: 
+    name: "Neutrino Transverse Momentum"
+    latex: "{p_{T}^{\\nu}}"
+    unit: "GeV"
+    # transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  eta_nu:
+    name: "Neutrino Pseudorapidity"
+    latex: "\\eta_{\\nu}"
+    unit: ""
+    # transformation: null
+    bins: [[7, 8], [8, 9], [9, 10], [10, 11], [11, 12], [12, .inf]]
+
+  phi_nu:
+    name: "Neutrino Azimuthal Angle"
+    latex: "\\phi_{\\nu}"
+    unit: "radians"
+    # transformation: null
+    bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
+  
+  sin_phi_nu:
+    name: "Sine of Neutrino Azimuthal Angle"
+    latex: "\\sin(\\phi_{\\nu})"
+    unit: ""
+    # transformation: null
+    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+
   E_lep: 
     name: "Lepton Energy"
     latex: "E_{\\mathrm{lep}}"
     unit: "GeV"
     # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+  pT_lep: 
+    name: "Lepton Transverse Momentum"
+    latex: "{p_{T}^{\\mathrm{lep}}}"
+    unit: "GeV"
+    # transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  eta_lep:
+    name: "Lepton Pseudorapidity"
+    latex: "\\eta_{\\mathrm{lep}}"
+    unit: ""
+    # transformation: null
+    bins: [[3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
+
+  phi_lep:
+    name: "Lepton Azimuthal Angle"
+    latex: "\\phi_{\\mathrm{lep}}"
+    unit: "radians"
+    # transformation: null
+    bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
   
-  E_vis: 
-    name: "Visible Energy"
-    latex: "E_{\\mathrm{vis}}"
+  sin_phi_lep:
+    name: "Sine of Lepton Azimuthal Angle"
+    latex: "\\sin(\\phi_{\\mathrm{lep}})"
+    unit: ""
+    # transformation: null
+    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+
+  E_jet: 
+    name: "Jet Energy"
+    latex: "E_{\\mathrm{jet}}"
     unit: "GeV"
     # transformation: "log10"
     bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  pT_jet: 
+    name: "Jet Transverse Momentum"
+    latex: "{p_{T}^{\\mathrm{jet}}}"
+    unit: "GeV"
+    # transformation: "log10"
+    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+  
+  eta_jet:
+    name: "Jet Pseudorapidity"
+    latex: "\\eta_{\\mathrm{jet}}"
+    unit: ""
+    # transformation: null
+    bins: [[3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
+
+  phi_jet:
+    name: "Jet Azimuthal Angle"
+    latex: "\\phi_{\\mathrm{jet}}"
+    unit: "radians"
+    # transformation: null
+    bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
+
+  sin_phi_jet:
+    name: "Sine of Jet Azimuthal Angle"
+    latex: "\\sin(\\phi_{\\mathrm{jet}})"
+    unit: ""
+    # transformation: null
+    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
   
   E_miss: 
     name: "Missing Energy"
@@ -133,34 +217,84 @@ variables:
     unit: "GeV"
     # transformation: "log10"
     bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
-
-  pT_lep: 
-    name: "Lepton Transverse Momentum"
-    latex: "{p_{T}^{\\mathrm{lep}}}"
-    unit: "GeV"
-    # transformation: "log10"
-    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
-
-  pT_jet: 
-    name: "Jet Transverse Momentum"
-    latex: "{p_{T}^{\\mathrm{jet}}}"
-    unit: "GeV"
-    # transformation: "log10"
-    bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
   
-  p_jet: 
-    name: "Jet Momentum"
-    latex: "{p^{\\mathrm{jet}}}"
-    unit: "GeV"
-    # transformation: "log10"
-    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  eta_miss:
+    name: "Missing Pseudorapidity"
+    latex: "\\eta_{\\mathrm{miss}}"
+    unit: ""
+    # transformation: null
+    bins: [[3, 4], [4, 5], [5, 6], [6,7], [7, 8], [8, .inf]]
+
+  phi_miss:
+    name: "Missing Azimuthal Angle"
+    latex: "\\phi_{\\mathrm{miss}}"
+    unit: "radians"
+    # transformation: null
+    bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
   
-  p_lep: 
-    name: "Lepton Momentum"
-    latex: "{p^{\\mathrm{lep}}}"
-    unit: "GeV"
-    # transformation: "log10"
-    bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  sin_phi_miss:
+    name: "Sine of Missing Azimuthal Angle"
+    latex: "\\sin(\\phi_{\\mathrm{miss}})"
+    unit: ""
+    # transformation: null
+    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+
+
+  # E_lep: 
+  #   name: "Lepton Energy"
+  #   latex: "E_{\\mathrm{lep}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  # E_vis: 
+  #   name: "Visible Energy"
+  #   latex: "E_{\\mathrm{vis}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  # E_miss: 
+  #   name: "Missing Energy"
+  #   latex: "E_{\\mathrm{miss}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+
+  # pT_miss: 
+  #   name: "Missing Transverse Momentum"
+  #   latex: "{p_{T}^{\\mathrm{miss}}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  # pT_lep: 
+  #   name: "Lepton Transverse Momentum"
+  #   latex: "{p_{T}^{\\mathrm{lep}}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+
+  # pT_jet: 
+  #   name: "Jet Transverse Momentum"
+  #   latex: "{p_{T}^{\\mathrm{jet}}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 5], [5, 10], [10, 20], [20, 30], [30, .inf]]
+  
+  # p_jet: 
+  #   name: "Jet Momentum"
+  #   latex: "{p^{\\mathrm{jet}}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
+  
+  # p_lep: 
+  #   name: "Lepton Momentum"
+  #   latex: "{p^{\\mathrm{lep}}}"
+  #   unit: "GeV"
+  #   # transformation: "log10"
+  #   bins: [[0, 100], [100, 200], [200, 300], [300, 400], [400, 600], [600, 800], [800, 1000], [1000, .inf]]
   
 
 
@@ -216,26 +350,88 @@ exp_name: "my experiment"  # Just a string that can be set to name an experiment
 #     std: 3.628
 stats:
   E_nu:
-    mean: 723.811
-    std: 499.637
-  E_vis:
-    mean: 603.272
-    std: 439.721
-  pT_miss:
-    mean: 2.554
-    std: 2.421
-  pT_lep:
-    mean: 5.437
-    std: 3.597
-  pT_jet:
-    mean: 5.444
-    std: 3.601
-  p_jet:
-    mean: 297.444
-    std: 325.912
-  p_lep:
-    mean: 426.562
-    std: 379.227
+    mean: 725.097
+    std: 496.358
+  pT_nu:
+    mean: 0.128
+    std: 0.105
+  eta_nu:
+    mean: 9.429
+    std: 0.530
+  phi_nu:
+    mean: 0.088
+    std: 1.857
   E_lep:
-    mean: 426.574
-    std: 379.217
+    mean: 426.621
+    std: 378.470
+  pT_lep:
+    mean: 5.458
+    std: 3.544
+  eta_lep:
+    mean: 4.810
+    std: 1.037
+  phi_lep:
+    mean: -0.006
+    std: 1.815
+  E_jet:
+    mean: 314.249
+    std: 324.885
+  pT_jet:
+    mean: 5.466
+    std: 3.546
+  eta_jet:
+    mean: 4.231
+    std: 1.166
+  phi_jet:
+    mean: 0.002
+    std: 1.812
+  E_miss:
+    mean: 196.781
+    std: 233.885
+  pT_miss:
+    mean: 2.571
+    std: 2.403
+  eta_miss:
+    mean: 4.712
+    std: 1.097
+  phi_miss:
+    mean: -0.009
+    std: 1.814
+  sin_phi_nu:
+    mean: 0
+    std: 1
+  sin_phi_lep:
+    mean: 0
+    std: 1
+  sin_phi_jet:
+    mean: 0
+    std: 1
+  sin_phi_miss:
+    mean: 0
+    std: 1
+
+
+  # E_nu:
+  #   mean: 723.811
+  #   std: 499.637
+  # E_vis:
+  #   mean: 603.272
+  #   std: 439.721
+  # pT_miss:
+  #   mean: 2.554
+  #   std: 2.421
+  # pT_lep:
+  #   mean: 5.437
+  #   std: 3.597
+  # pT_jet:
+  #   mean: 5.444
+  #   std: 3.601
+  # p_jet:
+  #   mean: 297.444
+  #   std: 325.912
+  # p_lep:
+  #   mean: 426.562
+  #   std: 379.227
+  # E_lep:
+  #   mean: 426.574
+  #   std: 379.217

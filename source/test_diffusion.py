@@ -13,8 +13,8 @@ from scipy.optimize import curve_fit
 import uproot
 from copy import deepcopy
 
-from source.spconv_model import Sparse3DFlowRegression
-from source.train_flow import GravNetLightning
+from source.diffusion_model import DiffusionSchedule, SparseDiffusionModel, q_sample
+from source.train_diffusion import GravNetLightning
 from source.dataset import GraphDataModule, unnorm_data
 
 from dataclasses import dataclass
@@ -103,7 +103,7 @@ def run_inference(cfg, model, dataloader, device):
         dim=1,  # (batch, n targets)
         )
 
-        y_pred = model(batch)
+        y_pred = model.sample(batch)
 
         # print(y_pred.shape)
         # print(y_true.shape)
@@ -601,7 +601,7 @@ def plot_true_and_reco(cfg, varname, targets_true, targets_pred, logscale=False,
     logging.info(f"Plotted {outfile}")
 
 
-def run_spconv_flow_testing(cfg: DictConfig):
+def run_diffusion_testing(cfg: DictConfig):
 
     logging.info("Starting testing...")
 
@@ -631,15 +631,8 @@ def run_spconv_flow_testing(cfg: DictConfig):
     assert len(pt_files) > 0, "No .pt files found" 
     logging.info(f"Found {len(pt_files)} files total")
 
-    datamodule = GraphDataModule(
-        pt_files=pt_files,
-        batch_size=cfg.testing.batch_size,
-        num_workers=cfg.testing.num_workers,
-    )
-    datamodule.setup()
-
-    # Reconstruct model exactly as in training
-    backbone = Sparse3DFlowRegression(cfg_this_run.model, batch_size=cfg.testing.batch_size).to(device)
+     # Reconstruct model exactly as in training
+    backbone = SparseDiffusionModel(cfg_this_run.model.n_targets, input_channels=1).to(device)
     model = GravNetLightning.load_from_checkpoint(
             checkpoint_path,
             model=backbone,
@@ -647,6 +640,13 @@ def run_spconv_flow_testing(cfg: DictConfig):
             # strict=False,
         )
     model.to(device)
+
+    datamodule = GraphDataModule(
+        pt_files=pt_files,
+        batch_size=cfg.testing.batch_size,
+        num_workers=cfg.testing.num_workers,
+    )
+    datamodule.setup()
 
 
     targets_true, targets_pred = run_inference(
