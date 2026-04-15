@@ -13,7 +13,7 @@ from scipy.optimize import curve_fit
 import uproot
 from copy import deepcopy
 
-from source.spconv_model import Sparse3DRegression
+from source.spconv_model import Sparse3DRegression, FullModel, loss_fn
 from source.train_flow import GravNetLightning
 from source.dataset import GraphDataModule, unnorm_data
 
@@ -87,46 +87,57 @@ def run_inference(cfg, model, dataloader, device):
     model.eval()
     model.freeze()
     
-    targets_true = {t : [] for t in cfg.training.targets}
-    targets_pred = {t : [] for t in cfg.training.targets}
+    targets_true = {t : [] for t in cfg.training.eval_targets}
+    targets_pred = {t : [] for t in cfg.training.eval_targets}
 
     for batch in tqdm(dataloader, desc="Running Inference..."):
         batch = batch.to(device)
 
-        target_truth = {t: batch[t] for t in cfg.training.targets if hasattr(batch, t)}
+        y_true = {t: batch[t] for t in cfg.training.eval_targets if hasattr(batch, t)}
         
-        y_true = torch.stack(
-        [
-            target_truth[t].float()
-            for t in cfg.training.targets
-        ],
-        dim=1,  # (batch, n targets)
-        )
+        # y_true = torch.stack(
+        # [
+        #     target_truth[t].float()
+        #     for t in cfg.training.eval_targets
+        # ],
+        # dim=1,  # (batch, n targets)
+        # )
 
         y_pred = model(batch)
 
-        # print(y_pred.shape)
-        # print(y_true.shape)
+        # # print(y_pred.shape)
+        # # print(y_true.shape)
         
-        for i, t in enumerate(cfg.training.targets):
-            targets_true[t].append(y_true.cpu()[:,i].numpy())
-            targets_pred[t].append(y_pred.cpu()[:,i].numpy())
+        for i, t in enumerate(cfg.training.eval_targets):
+            try:
+                targets_true[t].append(y_true[t].cpu().numpy())
+                targets_pred[t].append(y_pred[t].cpu().numpy())
+            except KeyError:
+                logging.warning(f"Target {t} not found in batch, skipping...")
+                continue
         
         # if nb > 500: break
 
         # break
 
-    for t in cfg.training.targets:
-        targets_true[t] = np.concatenate(targets_true[t])
-        targets_pred[t] = np.concatenate(targets_pred[t])
-    
-    
+    for t in cfg.training.eval_targets:
+        try:
+            targets_true[t] = np.concatenate(targets_true[t])
+            targets_pred[t] = np.concatenate(targets_pred[t])
+        except:
+            logging.warning(f"Target {t} not found in batch, skipping...")
+            continue
+
     # Apply mean, std scaling
     if cfg.preprocessing.normalise:
         stats = cfg.stats
-        for t in cfg.training.targets:
-            targets_true[t] = unnorm_data(targets_true[t], stats[t].mean, stats[t].std)
-            targets_pred[t] = unnorm_data(targets_pred[t], stats[t].mean, stats[t].std) 
+        for t in cfg.training.eval_targets:
+            try:
+                targets_true[t] = unnorm_data(targets_true[t], stats[t].mean, stats[t].std)
+                targets_pred[t] = unnorm_data(targets_pred[t], stats[t].mean, stats[t].std) 
+            except:
+                logging.warning(f"Stats for target {t} not found, skipping unnormalization...")
+                continue
 
     # Apply any necessary inverse transformations here
     # for t in cfg.training.targets:
@@ -536,12 +547,12 @@ def plot_pairwise_2dhists(targets, bins=50, cmap="viridis"):
 
             # Labels only on outer axes
             if i == n - 1:
-                ax.set_xlabel(f"Log10 {keys[j]}")
+                ax.set_xlabel(f"{keys[j]}")
             else:
                 ax.set_xticklabels([])
 
             if j == 0:
-                ax.set_ylabel(f"Log10 {keys[i]}")
+                ax.set_ylabel(f"{keys[i]}")
             else:
                 ax.set_yticklabels([])
 
@@ -639,7 +650,7 @@ def run_spconv_testing(cfg: DictConfig):
     datamodule.setup()
 
     # Reconstruct model exactly as in training
-    backbone = Sparse3DRegression(cfg_this_run.model).to(device)
+    backbone = FullModel().to(device)
     model = GravNetLightning.load_from_checkpoint(
             checkpoint_path,
             model=backbone,
@@ -657,19 +668,24 @@ def run_spconv_testing(cfg: DictConfig):
 
     output_file = uproot.recreate(os.path.join(cfg.testing.run_dir, cfg.testing.output_file))
 
-    plot_pairwise_2dhists(targets_true, bins=40)
-    plt.savefig(os.path.join(cfg.testing.run_dir, "TruePairwise2DHists.png"), dpi=300)
+    try:
+        plot_pairwise_2dhists(targets_true, bins=40)
+        plt.savefig(os.path.join(cfg.testing.run_dir, "TruePairwise2DHists.png"), dpi=300)
 
-    plot_pairwise_2dhists(targets_pred, bins=40)
-    plt.savefig(os.path.join(cfg.testing.run_dir, "PredPairwise2DHists.png"), dpi=300)
+        plot_pairwise_2dhists(targets_pred, bins=40)
+        plt.savefig(os.path.join(cfg.testing.run_dir, "PredPairwise2DHists.png"), dpi=300)
+    except Exception as e:
+        logging.warning(f"Failed to plot pairwise 2D histograms: {e}")
 
+    for varname in cfg_this_run.variables:
 
-    for varname in cfg_this_run.training.targets:
-
-        res_hists = plot_resolution_hists(cfg, varname, targets_true, targets_pred)
-        # plot_resolution_vs_target(cfg, varname, targets_true, targets_pred)
-        true_v_reco = plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False)
-        plot_true_and_reco(cfg, varname, targets_true, targets_pred)
+        try:
+            res_hists = plot_resolution_hists(cfg, varname, targets_true, targets_pred)
+            # plot_resolution_vs_target(cfg, varname, targets_true, targets_pred)
+            true_v_reco = plot_true_vs_reco(cfg, varname, targets_true, targets_pred, logscale=False)
+            plot_true_and_reco(cfg, varname, targets_true, targets_pred, logscale=False)
+        except :
+            logging.warning(f"Variable {varname} not found in targets, skipping...")
 
         continue
         bias_fit = plot_bias(cfg, varname, targets_true, targets_pred)

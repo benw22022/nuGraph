@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import logging
 
 from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-from source.spconv_model import Sparse3DRegression
+from source.spconv_model import Sparse3DRegression, FullModel, loss_fn
 import torch.nn as nn 
 import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -45,38 +45,39 @@ class GravNetLightning(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
+        y_true = {t: batch[t] for t in self.targets if hasattr(batch, t)}
         
-        y_true = torch.stack(
-        [
-            target_truth[t].float()
-            for t in self.targets
-        ],
-        dim=1,  # (batch, n targets)
-        )
+        # y_true = torch.stack(
+        # [
+        #     target_truth[t].float()
+        #     for t in self.targets
+        # ],
+        # dim=1,  # (batch, n targets)
+        # )
 
         y_pred = self(batch)
 
-        loss = self.reg_loss(y_pred, y_true)
+        loss = loss_fn(y_pred, y_true)
 
         self.log("train_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
+                
+        y_true = {t: batch[t] for t in self.targets if hasattr(batch, t)}
         
-        target_truth = {t: batch[t] for t in self.targets if hasattr(batch, t)}
-        
-        y_true = torch.stack(
-        [
-            target_truth[t].float()
-            for t in self.targets
-        ],
-        dim=1,  # (batch, n targets)
-        )
+        # y_true = torch.stack(
+        # [
+        #     target_truth[t].float()
+        #     for t in self.targets
+        # ],
+        # dim=1,  # (batch, n targets)
+        # )
 
         y_pred = self(batch)
-        loss = self.reg_loss(y_pred, y_true)
+
+        loss = loss_fn(y_pred, y_true)
 
         self.log("val_loss", loss.detach(), prog_bar=True, batch_size=batch.num_graphs)
 
@@ -160,11 +161,11 @@ def run_spconv_training(cfg):
     )
 
     model = GravNetLightning(
-        model=Sparse3DRegression(cfg.model).to(device),
+        model=FullModel().to(device),
         targets=cfg.training.targets,
         lr=cfg.training.learning_rate,
         lambda_reg=cfg.training.regression_loss_scale,
-    )
+        )
 
     
     checkpoint_cb = ModelCheckpoint(

@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import logging
 
 from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-from source.spconv_model import Sparse3DFlowRegression
+from source.spconv_model import FullFlowModel
 import torch.nn as nn 
 import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -157,7 +157,7 @@ def run_spconv_flow_training(cfg):
     )
 
     model = GravNetLightning(
-        model=Sparse3DFlowRegression(cfg.model).to(device),
+        model=FullFlowModel(cfg.model).to(device),
         targets=cfg.training.targets,
         lr=cfg.training.learning_rate,
         lambda_reg=cfg.training.regression_loss_scale,

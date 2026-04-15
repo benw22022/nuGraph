@@ -13,7 +13,7 @@ from scipy.optimize import curve_fit
 import uproot
 from copy import deepcopy
 
-from source.spconv_model import Sparse3DFlowRegression
+from source.spconv_model import FullFlowModel
 from source.train_flow import GravNetLightning
 from source.dataset import GraphDataModule, unnorm_data
 
@@ -639,7 +639,7 @@ def run_spconv_flow_testing(cfg: DictConfig):
     datamodule.setup()
 
     # Reconstruct model exactly as in training
-    backbone = Sparse3DFlowRegression(cfg_this_run.model, batch_size=cfg.testing.batch_size).to(device)
+    backbone = FullFlowModel(cfg_this_run.model, batch_size=cfg.testing.batch_size).to(device)
     model = GravNetLightning.load_from_checkpoint(
             checkpoint_path,
             model=backbone,
@@ -704,3 +704,6 @@ def run_spconv_flow_testing(cfg: DictConfig):
         for hist in res_hists_bias_corrected:
             output_file[f"{varname}/resHistsBiasCorr/{hist.get_hname()}"] = hist.as_numpy()
             
+
+
+

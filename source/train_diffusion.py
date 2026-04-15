@@ -12,7 +12,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 import logging
 
 from source.dataset import GraphDataset, CombinedDataset, GraphDataModule
-from source.diffusion_model import DiffusionSchedule, SparseDiffusionModel, q_sample
+from source.diffusion_model import DiffusionSchedule, SparseDiffusionModel, q_sample, subsample_tokens, to_dense_batch
 import torch.nn as nn 
 import torch.nn.functional as F
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -30,7 +30,7 @@ class GravNetLightning(pl.LightningModule):
         targets=["E_nu"],
         lr=1e-3,
         lambda_reg=0.25,
-        T=1000,
+        T=200,
         stats=None,
     ):
         super().__init__()
@@ -140,11 +140,48 @@ class GravNetLightning(pl.LightningModule):
             },
         }
 
+    # @torch.no_grad()
+    # def sample(self, batch):
+    #     sparse_tensor, _ = self._prepare_batch(batch)
+
+    #     context = self.model.encoder(sparse_tensor)
+
+    #     B = context.size(0)
+    #     y_dim = len(self.targets)
+    #     device = context.device
+
+    #     y_t = torch.randn(B, y_dim, device=device)
+
+    #     for t in reversed(range(self.schedule.T)):
+    #         t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
+
+    #         noise_pred = self.model.diffusion(y_t, t_tensor, context)
+
+    #         alpha = self.schedule.alpha[t]
+    #         alpha_bar = self.schedule.alpha_bar[t]
+    #         beta = self.schedule.beta[t]
+
+    #         noise = torch.randn_like(y_t) if t > 0 else 0
+
+    #         y_t = (
+    #             (1 / torch.sqrt(alpha)) *
+    #             (y_t - (1 - alpha) / torch.sqrt(1 - alpha_bar) * noise_pred)
+    #             + torch.sqrt(beta) * noise
+    #         )
+
+    #     return y_t
+
     @torch.no_grad()
     def sample(self, batch):
         sparse_tensor, _ = self._prepare_batch(batch)
 
-        context = self.model.encoder(sparse_tensor)
+        features, batch_idx = self.model.encoder(sparse_tensor)
+
+        # (optional but recommended)
+        features, batch_idx = subsample_tokens(features, batch_idx, max_tokens=1024)
+
+        # convert to dense tokens
+        context, mask = to_dense_batch(features, batch_idx)
 
         B = context.size(0)
         y_dim = len(self.targets)
@@ -155,7 +192,8 @@ class GravNetLightning(pl.LightningModule):
         for t in reversed(range(self.schedule.T)):
             t_tensor = torch.full((B,), t, device=device, dtype=torch.long)
 
-            noise_pred = self.model.diffusion(y_t, t_tensor, context)
+            # 🔥 IMPORTANT: call diffusion directly (not full model)
+            noise_pred = self.model.diffusion(y_t, t_tensor, context, mask)
 
             alpha = self.schedule.alpha[t]
             alpha_bar = self.schedule.alpha_bar[t]

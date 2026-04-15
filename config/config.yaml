@@ -58,7 +58,26 @@ training:
   learning_rate: 1e-3
   # targets: [E_nu, E_vis, pT_miss, pT_lep, pT_jet, p_jet, p_lep, E_lep]
   # targets: [E_nu, E_vis, pT_miss, pT_jet, p_jet]
-  targets: [E_nu, pT_nu, eta_nu, phi_nu, E_lep, pT_lep, eta_lep, phi_lep, E_jet, pT_jet, eta_jet, phi_jet, E_miss, pT_miss, eta_miss, phi_miss]
+  # targets: [E_nu, pT_nu, eta_nu, phi_nu, E_lep, pT_lep, eta_lep, phi_lep, E_jet, pT_jet, eta_jet, phi_jet, E_miss, pT_miss, eta_miss, phi_miss]
+  targets: [E_nu, pT_nu, eta_nu, sin_phi_nu, cos_phi_nu, E_lep, pT_lep, eta_lep, sin_phi_lep, cos_phi_lep, E_jet, pT_jet, eta_jet, sin_phi_jet, cos_phi_jet, E_miss, pT_miss, eta_miss, sin_phi_miss, cos_phi_miss]
+  eval_targets:
+  - phi_nu
+  - phi_lep
+  - phi_jet
+  - phi_miss
+  - E_nu
+  - pT_nu
+  - eta_nu
+  - E_lep
+  - pT_lep
+  - eta_lep
+  - E_jet
+  - pT_jet
+  - eta_jet
+  - E_miss
+  - pT_miss
+  - eta_miss
+  # targets: [E_nu, pT_nu, eta_nu, phi_nu, E_lep, pT_lep, eta_lep, phi_lep] #E_jet, pT_jet, eta_jet, phi_jet, E_miss, pT_miss, eta_miss, phi_miss]
   # targets: [E_nu]
   classes: None
   num_workers: 4
@@ -127,12 +146,12 @@ variables:
     # transformation: null
     bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
   
-  sin_phi_nu:
-    name: "Sine of Neutrino Azimuthal Angle"
-    latex: "\\sin(\\phi_{\\nu})"
-    unit: ""
-    # transformation: null
-    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+  # sin_phi_nu:
+  #   name: "Sine of Neutrino Azimuthal Angle"
+  #   latex: "\\sin(\\phi_{\\nu})"
+  #   unit: ""
+  #   # transformation: null
+  #   bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
 
   E_lep: 
     name: "Lepton Energy"
@@ -162,12 +181,12 @@ variables:
     # transformation: null
     bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
   
-  sin_phi_lep:
-    name: "Sine of Lepton Azimuthal Angle"
-    latex: "\\sin(\\phi_{\\mathrm{lep}})"
-    unit: ""
-    # transformation: null
-    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+  # sin_phi_lep:
+  #   name: "Sine of Lepton Azimuthal Angle"
+  #   latex: "\\sin(\\phi_{\\mathrm{lep}})"
+  #   unit: ""
+  #   # transformation: null
+  #   bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
 
   E_jet: 
     name: "Jet Energy"
@@ -197,12 +216,12 @@ variables:
     # transformation: null
     bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
 
-  sin_phi_jet:
-    name: "Sine of Jet Azimuthal Angle"
-    latex: "\\sin(\\phi_{\\mathrm{jet}})"
-    unit: ""
-    # transformation: null
-    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+  # sin_phi_jet:
+  #   name: "Sine of Jet Azimuthal Angle"
+  #   latex: "\\sin(\\phi_{\\mathrm{jet}})"
+  #   unit: ""
+  #   # transformation: null
+  #   bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
   
   E_miss: 
     name: "Missing Energy"
@@ -232,12 +251,12 @@ variables:
     # transformation: null
     bins: [[-3.14, -2], [-2, -1], [-1, 0], [0, 1], [1, 2], [2, 3.14]]
   
-  sin_phi_miss:
-    name: "Sine of Missing Azimuthal Angle"
-    latex: "\\sin(\\phi_{\\mathrm{miss}})"
-    unit: ""
-    # transformation: null
-    bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
+  # sin_phi_miss:
+  #   name: "Sine of Missing Azimuthal Angle"
+  #   latex: "\\sin(\\phi_{\\mathrm{miss}})"
+  #   unit: ""
+  #   # transformation: null
+  #   bins: [[-1, -0.5], [-0.5, 0], [0, 0.5], [0.5, 1]]
 
 
   # E_lep: 
